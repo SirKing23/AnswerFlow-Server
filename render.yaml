@@ -1,0 +1,30 @@
+services:
+  - type: web
+    name: rag-processing-server
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: UNSTRUCTURED_API_KEY
+        sync: false
+      - key: WEBHOOK_SECRET
+        sync: false
+      - key: OPENAI_EMBEDDING_MODEL
+        value: text-embedding-3-small
+      - key: CHUNK_SIZE_TOKENS
+        value: "512"
+      - key: CHUNK_OVERLAP_TOKENS
+        value: "64"
+      - key: EMBEDDING_BATCH_SIZE
+        value: "100"
+      - key: MAX_FILE_SIZE_MB
+        value: "25"
+      - key: STORAGE_BUCKET
+        value: user-files
