@@ -1,11 +1,15 @@
-import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+import os
+import sys
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
 
 from config import SELF_PARSE_MIME_TYPES, UNSTRUCTURED_MIME_TYPES
-from services.parser.text_parser   import parse_txt, parse_markdown, parse_csv
-from services.parser.docx_parser   import parse_docx
-from services.parser.excel_parser  import parse_xlsx
-from services.parser.unstructured_parser import parse_with_unstructured
+from text_parser import parse_txt, parse_markdown, parse_csv
+from docx_parser import parse_docx
+from excel_parser import parse_xlsx
+from unstructured_parser import parse_with_unstructured
 
 
 async def parse_file(file_bytes: bytes, file_name: str, mime_type: str) -> str:

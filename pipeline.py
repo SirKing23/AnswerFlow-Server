@@ -1,11 +1,15 @@
-import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import os
+import sys
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
 
 import hashlib
 import os
 from datetime import datetime, timezone
 
-from utils.supabase_client import (
+from supabase_client import (
     download_file_from_storage,
     create_job,
     update_job_status,
@@ -13,9 +17,9 @@ from utils.supabase_client import (
     check_duplicate,
     store_embeddings,
 )
-from services.parser.router import parse_file
-from services.chunker       import chunk_text
-from services.embedder      import embed_chunks
+from router import parse_file
+from chunker import chunk_text
+from embedder import embed_chunks
 
 
 async def process_file_pipeline(

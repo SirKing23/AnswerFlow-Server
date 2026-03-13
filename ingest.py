@@ -1,9 +1,13 @@
-import sys, os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import os
+import sys
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
 
 from fastapi import APIRouter, Request, HTTPException, BackgroundTasks, Depends
-from middleware.auth  import verify_webhook_secret
-from services.pipeline import process_file_pipeline
+from auth import verify_webhook_secret
+from pipeline import process_file_pipeline
 from config import STORAGE_BUCKET
 
 router = APIRouter()
