@@ -1,6 +1,12 @@
+import sys
+import os
+
+# Ensure project root is in Python path so all module imports resolve correctly
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from routers import ingest
+from router import ingest
 
 app = FastAPI(
     title="RAG Processing Server",
