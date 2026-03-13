@@ -15,7 +15,7 @@ openai==1.35.3
 # Parsing libraries
 mammoth==1.7.1          # docx
 openpyxl==3.1.4         # xlsx - use read_only mode
-tiktoken==0.7.0         # exact token counting
+tiktoken==0.6.0         # exact token counting (0.6.0 has pre-built wheels)
 
 # Utilities
 # hashlib is built into Python stdlib — no install needed
