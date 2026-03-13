@@ -18,6 +18,5 @@ openpyxl==3.1.4         # xlsx - use read_only mode
 tiktoken==0.7.0         # exact token counting
 
 # Utilities
-python-magic==0.4.27    # mime type verification
-hashlib2==1.0.0         # content hashing (stdlib hashlib is fine too)
+# hashlib is built into Python stdlib — no install needed
 tenacity==8.3.0         # retry logic for API calls
