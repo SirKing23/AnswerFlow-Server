@@ -7,6 +7,7 @@ if BASE_DIR not in sys.path:
 
 import hashlib
 import os
+import asyncio
 from datetime import datetime, timezone
 
 from supabase_client import (
@@ -41,6 +42,7 @@ async def process_file_pipeline(
 
     try:
         # ── 1. Create job record ──────────────────────────────────────
+        await asyncio.sleep(5)
         job_id = await create_job(
             user_file_id=user_file_id,
             user_id=user_id,
