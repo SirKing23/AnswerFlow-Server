@@ -1,3 +1,6 @@
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
 from config import SELF_PARSE_MIME_TYPES, UNSTRUCTURED_MIME_TYPES
 from services.parser.text_parser   import parse_txt, parse_markdown, parse_csv
 from services.parser.docx_parser   import parse_docx

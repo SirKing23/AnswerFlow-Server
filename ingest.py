@@ -1,3 +1,6 @@
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from fastapi import APIRouter, Request, HTTPException, BackgroundTasks, Depends
 from middleware.auth  import verify_webhook_secret
 from services.pipeline import process_file_pipeline

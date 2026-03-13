@@ -1,3 +1,6 @@
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import asyncio
 from openai import AsyncOpenAI
 from tenacity import retry, stop_after_attempt, wait_exponential
