@@ -18,24 +18,33 @@ async def parse_with_unstructured(file_bytes: bytes, file_name: str, mime_type: 
     We preserve element type context by prepending it to the text,
     which significantly improves retrieval accuracy for structured docs.
     """
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        response = await client.post(
-            UNSTRUCTURED_API_URL,
-            headers={
-                "unstructured-api-key": UNSTRUCTURED_API_KEY,
-                "Accept": "application/json",
-            },
-            files={
-                "files": (file_name, io.BytesIO(file_bytes), mime_type)
-            },
-            data={
-                # hi_res gives better table/layout extraction
-                # fast is cheaper but misses complex layouts
-                "strategy":             "hi_res",
-                "include_page_breaks":  "true",
-                "coordinates":          "false",   # we don't need bounding boxes
-            }
-        )
+    # Try hi_res first for best quality, fall back to fast if it times out
+    for strategy in ["hi_res", "fast"]:
+        try:
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                response = await client.post(
+                    UNSTRUCTURED_API_URL,
+                    headers={
+                        "unstructured-api-key": UNSTRUCTURED_API_KEY,
+                        "Accept": "application/json",
+                    },
+                    files={
+                        "files": (file_name, io.BytesIO(file_bytes), mime_type)
+                    },
+                    data={
+                        "strategy":            strategy,
+                        "include_page_breaks": "true",
+                        "coordinates":         "false",
+                    }
+                )
+            if response.status_code == 200:
+                break  # success, stop retrying
+            print(f"[unstructured] strategy={strategy} returned {response.status_code}, trying next")
+        except (httpx.ReadError, httpx.TimeoutException) as e:
+            print(f"[unstructured] strategy={strategy} failed with {e}, trying next")
+            if strategy == "hi_res":
+                raise ValueError(f"Unstructured.io failed on all strategies: {e}")
+            continue
 
     if response.status_code != 200:
         raise ValueError(
