@@ -1,13 +1,15 @@
 import re
-import tiktoken
 from config import CHUNK_SIZE_TOKENS, CHUNK_OVERLAP_TOKENS
-
-# Use the tokenizer that matches text-embedding-3-small
-_encoder = tiktoken.get_encoding("cl100k_base")
 
 
 def count_tokens(text: str) -> int:
-    return len(_encoder.encode(text))
+    """
+    Estimate token count without tiktoken.
+    Rule of thumb: 1 token ≈ 4 characters for English text.
+    This is accurate enough for chunking — we don't need exact counts,
+    just a consistent measure to split on.
+    """
+    return len(text) // 4
 
 
 def chunk_text(text: str, file_name: str = "") -> list[dict]:
