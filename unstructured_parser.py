@@ -21,7 +21,15 @@ async def parse_with_unstructured(file_bytes: bytes, file_name: str, mime_type: 
     # Try hi_res first for best quality, fall back to fast if it times out
     for strategy in ["hi_res", "fast"]:
         try:
-            async with httpx.AsyncClient(timeout=300.0) as client:
+            # Use explicit timeout config — connect timeout separate from read timeout
+            # hi_res can take 3-5 minutes for complex PDFs
+            timeout = httpx.Timeout(
+                connect=30.0,   # time to establish connection
+                read=600.0,     # time to wait for response (10 min max)
+                write=60.0,     # time to upload the file
+                pool=30.0
+            )
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(
                     UNSTRUCTURED_API_URL,
                     headers={
