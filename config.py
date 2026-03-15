@@ -15,7 +15,7 @@ OPENAI_EMBEDDING_MODEL    = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-
 UNSTRUCTURED_API_KEY      = os.environ["UNSTRUCTURED_API_KEY"]
 UNSTRUCTURED_API_URL      = os.getenv(
     "UNSTRUCTURED_API_URL",
-    "https://api.unstructured.io/general/v0/general"
+    "https://api.unstructuredapp.io/general/v0/general"
 )
 
 # Security
