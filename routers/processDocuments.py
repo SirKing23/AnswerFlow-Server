@@ -6,8 +6,8 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 from fastapi import APIRouter, Request, HTTPException, BackgroundTasks, Depends
-from auth import verify_webhook_secret
-from pipeline import process_file_pipeline
+from middleware.auth import verify_webhook_secret
+from services.pipelineDocument import process_file_pipeline
 from config import STORAGE_BUCKET
 
 router = APIRouter()

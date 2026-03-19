@@ -6,16 +6,28 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-import ingest
+from fastapi.middleware.cors import CORSMiddleware
+from routers import processDocuments, processChats, agent
 
 app = FastAPI(
     title="RAG Processing Server",
-    description="Handles file parsing, chunking, and embedding for Supabase RAG pipeline",
-    version="1.0.0",
+    description="Handles file parsing, chunking, embedding and agentic RAG",
+    version="2.0.0",
+)
+
+# ── CORS ──────────────────────────────────────────────────────────────────────
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],        # tighten this to your actual domain in production
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # ── Routers ───────────────────────────────────────────────────────────────────
-app.include_router(ingest.router)
+app.include_router(processDocuments.router)
+app.include_router(processChats.router)
+app.include_router(agent.router)
 
 
 # ── Health check ──────────────────────────────────────────────────────────────

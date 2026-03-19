@@ -10,7 +10,7 @@ import os
 import asyncio
 from datetime import datetime, timezone
 
-from supabase_client import (
+from utils.supabase_client import (
     download_file_from_storage,
     create_job,
     update_job_status,
@@ -18,7 +18,7 @@ from supabase_client import (
     check_duplicate,
     store_embeddings,
 )
-from router import parse_file
+from services.parser.router import parse_file
 from chunker import chunk_text
 from embedder import embed_chunks
 

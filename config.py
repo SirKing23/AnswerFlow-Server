@@ -6,6 +6,7 @@ load_dotenv()
 # Supabase
 SUPABASE_URL              = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+SUPABASE_JWT_SECRET       = os.environ["SUPABASE_JWT_SECRET"]
 
 # OpenAI
 OPENAI_API_KEY            = os.environ["OPENAI_API_KEY"]
