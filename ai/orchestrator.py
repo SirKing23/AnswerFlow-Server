@@ -3,7 +3,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import uuid
 from typing import Optional
-from agents import Agent, Runner
+from agents import Agent, Runner, ModelSettings
 from ai.tools import (
     user_query_embedder_tool,
     search_chunks_tool,
@@ -14,7 +14,7 @@ from ai.tools import (
     get_run_context,
     clear_run_context,
 )
-from config import OPENAI_API_KEY
+from config import OPENAI_API_KEY, OPENAI_CHAT_MODEL
 import os as _os
 _os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 
@@ -74,7 +74,8 @@ async def run_agent(
     agent = Agent(
         name="RAG Orchestrator",
         instructions=ORCHESTRATOR_INSTRUCTIONS,
-        model="gpt-4o-mini",
+        model=OPENAI_CHAT_MODEL,
+        model_settings=ModelSettings(parallel_tool_calls=False),
         tools=[
             query_decomposer_tool,
             user_query_embedder_tool,

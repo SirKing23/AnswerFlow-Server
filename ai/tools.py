@@ -56,6 +56,7 @@ async def user_query_embedder_tool(input: EmbedInput) -> str:
     ctx = _run_context.get(input.run_id, {})
     ctx["embedding"] = embedding
     _run_context[input.run_id] = ctx
+    print(f"[user_query_embedder_tool] created embedding with {len(embedding)} dimensions")
     return f"Embedding created successfully ({len(embedding)} dimensions). Ready for search."
 
 
@@ -81,8 +82,10 @@ async def search_chunks_tool(input: SearchInput) -> str:
     file_id   = ctx.get("file_id")
 
     if not embedding:
+        print("[search_chunks_tool] Error: No embedding found in context")
         return "Error: No embedding found. Call user_query_embedder_tool first."
     if not user_id:
+        print("[search_chunks_tool] Error: No user_id in context")
         return "Error: No user_id in context."
 
     supabase = get_supabase()
@@ -95,6 +98,7 @@ async def search_chunks_tool(input: SearchInput) -> str:
             "match_count":          input.match_count,
             "similarity_threshold": input.similarity_threshold,
         }).execute()
+        print(f"[search_chunks_tool] via file_id={file_id} found {len(result.data or [])} chunks.  user_id={user_id}")
     else:
         result = supabase.rpc("match_chunks", {
             "query_embedding":      embedding,
@@ -102,10 +106,12 @@ async def search_chunks_tool(input: SearchInput) -> str:
             "match_count":          input.match_count,
             "similarity_threshold": input.similarity_threshold,
         }).execute()
+        print(f"[search_chunks_tool] found {len(result.data or [])} chunks  from general search. user_id={user_id}")
 
     chunks = result.data or []
 
     if not chunks:
+        print("[search_chunks_tool] No relevant chunks found")
         return "No relevant chunks found in the user's documents for this query."
 
     ctx["chunks"] = chunks
@@ -118,6 +124,8 @@ async def search_chunks_tool(input: SearchInput) -> str:
             f"Similarity: {round(chunk['similarity'], 3)}\n"
             f"{chunk['content'][:300]}{'...' if len(chunk['content']) > 300 else ''}\n"
         )
+    
+    print(f"[search_chunks_tool] found {len(chunks)} chunks")
     return "\n".join(lines)
 
 
@@ -160,15 +168,22 @@ async def query_decomposer_tool(input: DecomposeInput) -> str:
     ctx = _run_context.get(input.run_id, {})
     ctx["decomposed_queries"] = result
     _run_context[input.run_id] = ctx
+
+    print(f"[query_decomposer_tool] decomposed queries: {result}")
     return result
 
 
 # ── Tool 4: context_builder_tool ──────────────────────────────────────────────
 
+class ChatMessage(BaseModel):
+    role:    str = Field(description="Role of the message sender: user or assistant")
+    content: str = Field(description="Content of the message")
+
+
 class ContextBuilderInput(BaseModel):
-    run_id:       str  = Field(description="The current run ID for context sharing")
-    user_query:   str  = Field(description="The user's original question")
-    chat_history: list = Field(default=[], description="Previous conversation messages")
+    run_id:       str             = Field(description="The current run ID for context sharing")
+    user_query:   str             = Field(description="The user's original question")
+    chat_history: list[ChatMessage] = Field(default=[], description="Previous conversation messages")
 
 
 @function_tool
@@ -193,7 +208,7 @@ async def context_builder_tool(input: ContextBuilderInput) -> str:
     history_text = ""
     if input.chat_history:
         history_text = "\n".join([
-            f"{m['role'].upper()}: {m['content']}"
+            f"{m.role.upper()}: {m.content}"
             for m in input.chat_history[-6:]
         ])
 
@@ -238,6 +253,8 @@ async def context_builder_tool(input: ContextBuilderInput) -> str:
         for c in chunks
     ]
     _run_context[input.run_id] = ctx
+
+    print(f"[context_builder_tool] enriched context: {enriched_context}")
     return enriched_context
 
 
@@ -286,4 +303,6 @@ async def answer_validator_tool(input: ValidatorInput) -> str:
         temperature=0.0,
         max_tokens=400,
     )
-    return response.choices[0].message.content.strip()
+    result = response.choices[0].message.content.strip()
+    print(f"[answer_validator_tool] validation result: {result}")
+    return result
