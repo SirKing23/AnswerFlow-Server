@@ -15,8 +15,13 @@ openai==2.26.0
 # Parsing libraries
 mammoth==1.7.1          # docx
 openpyxl==3.1.4         # xlsx - use read_only mode
+docling          # Document parsing and processing utilities
+
+
+
 # tiktoken removed — no pre-built wheels for Python 3.14 on Render
 # using character-based token estimation instead (4 chars ≈ 1 token)
+
  
 # Utilities
 # hashlib is built into Python stdlib — no install needed
