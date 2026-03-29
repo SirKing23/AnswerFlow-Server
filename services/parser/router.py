@@ -10,6 +10,7 @@ from text_parser import parse_txt, parse_markdown, parse_csv
 from docx_parser import parse_docx
 from excel_parser import parse_xlsx
 from unstructured_parser import parse_with_unstructured
+from docling_parser import parse_with_docling
 
 
 async def parse_file(file_bytes: bytes, file_name: str, mime_type: str) -> str:
@@ -49,8 +50,12 @@ async def parse_file(file_bytes: bytes, file_name: str, mime_type: str) -> str:
             return parse_xlsx(file_bytes)
 
     # ── Unstructured.io path ──────────────────────────────────────────
+    #  if mime_type in UNSTRUCTURED_MIME_TYPES:
+   #     return await parse_with_unstructured(file_bytes, file_name, mime_type)
+    
     if mime_type in UNSTRUCTURED_MIME_TYPES:
-        return await parse_with_unstructured(file_bytes, file_name, mime_type)
+        return await parse_with_docling(file_bytes, file_name, mime_type)
+
 
     # ── Unknown mime type ─────────────────────────────────────────────
     raise ValueError(f"Unsupported mime type: {mime_type}")

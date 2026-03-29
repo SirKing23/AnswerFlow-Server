@@ -10,7 +10,7 @@ _client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 # How many chunks to retrieve for context
 TOP_K = 5
-SIMILARITY_THRESHOLD = 0.70
+SIMILARITY_THRESHOLD = 0.30
 
 
 async def chat_with_docs(

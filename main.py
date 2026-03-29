@@ -26,7 +26,7 @@ app.add_middleware(
 
 # ── Routers ───────────────────────────────────────────────────────────────────
 app.include_router(processDocuments.router)
-#app.include_router(processChats.router)
+app.include_router(processChats.router)
 app.include_router(agent.router)
 
 

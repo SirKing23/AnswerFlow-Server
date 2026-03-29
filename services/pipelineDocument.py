@@ -20,6 +20,7 @@ from utils.supabase_client import (
 )
 from services.parser.router import parse_file
 from chunker import chunk_text
+from docling_chunker import chunk_markdown
 from embedder import embed_chunks
 
 
@@ -77,7 +78,7 @@ async def process_file_pipeline(
 
         # ── 5. Chunk ──────────────────────────────────────────────────
         await _set_status(user_file_id, job_id, "chunking")
-        chunks = chunk_text(text, file_name=file_name)
+        chunks = chunk_markdown(text, file_name=file_name)
 
         if not chunks:
             raise ValueError("Chunking produced no chunks")

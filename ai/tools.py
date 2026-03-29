@@ -64,7 +64,7 @@ async def user_query_embedder_tool(input: EmbedInput) -> str:
 
 class SearchInput(BaseModel):
     run_id:               str   = Field(description="The current run ID for context sharing")
-    similarity_threshold: float = Field(default=0.70, description="Minimum similarity score 0-1")
+    similarity_threshold: float = Field(default=0.30, description="Minimum similarity score 0-1")
     match_count:          int   = Field(default=5,    description="Number of chunks to retrieve")
 
 
