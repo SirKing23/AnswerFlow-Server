@@ -25,28 +25,15 @@ Chunk format (identical to your existing chunker.py pipeline):
     }
   }
 
-Token settings (tuned for OpenAI text-embedding-3-small):
-  CHUNK_SIZE_TOKENS    = 512   (max tokens per chunk)
-  CHUNK_OVERLAP_TOKENS = 100   (~20% overlap to preserve cross-boundary context)
 
-Usage:
-  python docling_chunker.py report_meta.json
-  python docling_chunker.py report.md
-  python docling_chunker.py report_meta.json --chunk-size 256
-  python docling_chunker.py report_meta.json --overlap 50
-  python docling_chunker.py report_meta.json --output-dir ./chunks
-  python docling_chunker.py *.json --output-dir ./chunks
+
 """
 
-import argparse
-import itertools
-import json
+
 import os
 import re
 import sys
-import threading
-import time
-from pathlib import Path
+
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
@@ -66,174 +53,6 @@ DEFAULT_OVERLAP       = CHUNK_OVERLAP_TOKENS  # overlap tokens between consecuti
 # ---------------------------------------------------------------------------
 def count_tokens(text: str) -> int:
     return len(text) // 4
-
-
-# ---------------------------------------------------------------------------
-# Spinner
-# ---------------------------------------------------------------------------
-class Spinner:
-    FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-
-    def __init__(self, message: str = ""):
-        self.message = message
-        self._stop_event = threading.Event()
-        self._thread = threading.Thread(target=self._spin, daemon=True)
-        self._current_line_len = 0
-
-    def _spin(self):
-        for frame in itertools.cycle(self.FRAMES):
-            if self._stop_event.is_set():
-                break
-            line = f"\r  {frame}  {self.message}"
-            sys.stdout.write(line)
-            sys.stdout.flush()
-            self._current_line_len = len(line)
-            time.sleep(0.08)
-
-    def start(self):
-        self._thread.start()
-        return self
-
-    def stop(self, final_msg: str = "", status: str = "OK"):
-        self._stop_event.set()
-        self._thread.join()
-        sys.stdout.write(f"\r{' ' * (self._current_line_len + 2)}\r")
-        sys.stdout.flush()
-        if final_msg:
-            icon = "✔" if status == "OK" else "✖" if status == "ERROR" else "⚠"
-            print(f"  {icon}  {final_msg}")
-
-    def __enter__(self):
-        self.start()
-        return self
-
-    def __exit__(self, *_):
-        self.stop()
-
-
-# ---------------------------------------------------------------------------
-# Argument parsing
-# ---------------------------------------------------------------------------
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Chunk docling-parsed documents into embedder-ready JSON.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
-    parser.add_argument(
-        "inputs",
-        nargs="+",
-        metavar="FILE",
-        help="_meta.json or .md file(s) produced by docling_parser.py",
-    )
-    parser.add_argument(
-        "--chunk-size",
-        type=int,
-        default=DEFAULT_CHUNK_SIZE,
-        metavar="N",
-        help=f"Max tokens per chunk (default: {DEFAULT_CHUNK_SIZE}).",
-    )
-    parser.add_argument(
-        "--overlap",
-        type=int,
-        default=DEFAULT_OVERLAP,
-        metavar="N",
-        help=f"Overlap tokens between chunks (default: {DEFAULT_OVERLAP}).",
-    )
-    parser.add_argument(
-        "--output-dir", "-o",
-        default=None,
-        metavar="DIR",
-        help="Output directory (default: same folder as input file).",
-    )
-    return parser.parse_args()
-
-
-# ---------------------------------------------------------------------------
-# Load content from _meta.json or .md
-# ---------------------------------------------------------------------------
-def load_elements(input_path: Path) -> tuple[list[dict], str]:
-    """
-    Returns (elements, source_filename).
-
-    For _meta.json: reads the 'elements' array directly — each element has
-    type, text, page, headings etc. (produced by _build_content_json).
-
-    For .md: parses Markdown into synthetic elements so the same
-    chunking logic applies.
-    """
-    ext = input_path.suffix.lower()
-
-    if ext == ".json":
-        raw = json.loads(input_path.read_text(encoding="utf-8"))
-
-        # Validate it's our content JSON format (has 'elements' key)
-        if "elements" not in raw:
-            raise RuntimeError(
-                "This JSON doesn't look like a docling_parser.py content JSON "
-                "(missing 'elements' key). Make sure you're passing the "
-                "_meta.json produced by the updated docling_parser.py."
-            )
-
-        source = raw.get("filename", input_path.stem.replace("_meta", ""))
-        return raw["elements"], source
-
-    elif ext in (".md", ".markdown"):
-        elements = _parse_markdown_to_elements(
-            input_path.read_text(encoding="utf-8")
-        )
-        return elements, input_path.name
-
-    else:
-        raise RuntimeError(
-            f"Unsupported file type '{ext}'. Pass a _meta.json or .md file."
-        )
-
-
-def _parse_markdown_to_elements(md_text: str) -> list[dict]:
-    """Convert a Markdown string into a list of synthetic elements."""
-    elements = []
-    lines = md_text.splitlines()
-    buffer = []
-
-    def flush_buffer():
-        text = " ".join(buffer).strip()
-        if text:
-            elements.append({"type": "text", "text": text, "page": None})
-        buffer.clear()
-
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            flush_buffer()
-            continue
-
-        # Markdown heading
-        m = re.match(r"^(#{1,6})\s+(.*)", stripped)
-        if m:
-            flush_buffer()
-            elements.append({
-                "type":  "heading",
-                "level": len(m.group(1)),
-                "text":  m.group(2).strip(),
-                "page":  None,
-            })
-            continue
-
-        # Markdown table row
-        if stripped.startswith("|"):
-            flush_buffer()
-            elements.append({
-                "type":     "table",
-                "markdown": stripped,
-                "page":     None,
-            })
-            continue
-
-        buffer.append(stripped)
-
-    flush_buffer()
-    return elements
 
 
 # ---------------------------------------------------------------------------
@@ -419,9 +238,8 @@ def chunk_elements(
 
     return chunks
 
-
 # ---------------------------------------------------------------------------
-# Public API — chunk a markdown string produced by parse_with_docling
+# chunk a markdown string produced by parse_with_docling
 # ---------------------------------------------------------------------------
 def chunk_markdown(markdown_text: str, file_name: str = "") -> list[dict]:
     """
@@ -438,161 +256,49 @@ def chunk_markdown(markdown_text: str, file_name: str = "") -> list[dict]:
         overlap=DEFAULT_OVERLAP,
     )
 
+def _parse_markdown_to_elements(md_text: str) -> list[dict]:
+    """Convert a Markdown string into a list of synthetic elements."""
+    elements = []
+    lines = md_text.splitlines()
+    buffer = []
 
-# ---------------------------------------------------------------------------
-# Process a single file
-# ---------------------------------------------------------------------------
-def process_file(input_path: Path, args) -> bool:
-    print(f"  {'─'*56}")
-    print(f"  📄  {input_path.name}")
-    print(f"  {'─'*56}")
+    def flush_buffer():
+        text = " ".join(buffer).strip()
+        if text:
+            elements.append({"type": "text", "text": text, "page": None})
+        buffer.clear()
 
-    if args.output_dir:
-        output_dir = Path(args.output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-    else:
-        output_dir = input_path.parent
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            flush_buffer()
+            continue
 
-    stem = input_path.stem
-    if stem.endswith("_meta"):
-        stem = stem[:-5]
-    output_path = output_dir / f"{stem}_chunks.json"
+        # Markdown heading
+        m = re.match(r"^(#{1,6})\s+(.*)", stripped)
+        if m:
+            flush_buffer()
+            elements.append({
+                "type":  "heading",
+                "level": len(m.group(1)),
+                "text":  m.group(2).strip(),
+                "page":  None,
+            })
+            continue
 
-    t0 = time.time()
+        # Markdown table row
+        if stripped.startswith("|"):
+            flush_buffer()
+            elements.append({
+                "type":     "table",
+                "markdown": stripped,
+                "page":     None,
+            })
+            continue
 
-    # ── Load ──────────────────────────────────────────────────────────────────
-    elements = None
-    source   = None
-    err      = None
+        buffer.append(stripped)
 
-    def do_load():
-        nonlocal elements, source, err
-        try:
-            elements, source = load_elements(input_path)
-        except Exception as exc:
-            err = exc
-
-    with Spinner("Loading content JSON…"):
-        t = threading.Thread(target=do_load, daemon=True)
-        t.start(); t.join()
-
-    if err:
-        print(f"  ✖  Failed to load: {err}")
-        return False
-
-    print(f"  ✔  Loaded {len(elements)} elements from {source}")
-
-    # ── Chunk ─────────────────────────────────────────────────────────────────
-    chunks  = None
-    err     = None
-
-    def do_chunk():
-        nonlocal chunks, err
-        try:
-            chunks = chunk_elements(
-                elements, source, args.chunk_size, args.overlap
-            )
-        except Exception as exc:
-            err = exc
-
-    with Spinner(
-        f"Chunking… (size={args.chunk_size} tokens, overlap={args.overlap} tokens)"
-    ):
-        t = threading.Thread(target=do_chunk, daemon=True)
-        t.start(); t.join()
-
-    if err:
-        print(f"  ✖  Chunking failed: {err}")
-        return False
-
-    elapsed = time.time() - t0
-    print(f"  ✔  {len(chunks)} chunks created in {elapsed:.1f}s")
-
-    # ── Token stats ───────────────────────────────────────────────────────────
-    if chunks:
-        token_counts = [c["token_count"] for c in chunks]
-        avg = sum(token_counts) / len(token_counts)
-        print(f"  ℹ  Tokens — avg: {avg:.0f}  min: {min(token_counts)}  max: {max(token_counts)}")
-
-    # ── Save ──────────────────────────────────────────────────────────────────
-    with Spinner("Saving chunks.json…"):
-        output_path.write_text(
-            json.dumps(chunks, indent=2, ensure_ascii=False),
-            encoding="utf-8",
-        )
-    print(f"  ✔  Saved → {output_path.name}")
-
-    # ── Sample preview ────────────────────────────────────────────────────────
-    if chunks:
-        s = chunks[0]
-        print(f"\n  📦  Sample — chunk #0:")
-        print(f"      section      : {s['metadata']['section'] or '(none)'}")
-        print(f"      page         : {s['metadata']['page'] or '?'}")
-        print(f"      token_count  : {s['token_count']}")
-        print(f"      element_types: {s['metadata']['element_types']}")
-        preview = s['content'][:150] + ("…" if len(s['content']) > 150 else "")
-        print(f"      content      : {preview}")
-
-    print()
-    return True
+    flush_buffer()
+    return elements
 
 
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
-def main():
-    args = parse_args()
-
-    # Resolve inputs
-    input_paths = []
-    for raw in args.inputs:
-        p = Path(raw)
-        if "*" in str(p) or "?" in str(p):
-            input_paths.extend(sorted(Path(".").glob(str(p))))
-        elif p.exists():
-            input_paths.append(p)
-        else:
-            print(f"  ⚠  File not found: {raw}")
-
-    if not input_paths:
-        print("  ✖  No valid input files found.")
-        sys.exit(1)
-
-    print()
-    print("  ╔══════════════════════════════════════════════════════════╗")
-    print("  ║           DOCLING DOCUMENT CHUNKER                      ║")
-    print("  ╚══════════════════════════════════════════════════════════╝")
-    print(f"  Files       : {len(input_paths)}")
-    print(f"  Chunk size  : {args.chunk_size} tokens")
-    print(f"  Overlap     : {args.overlap} tokens")
-    print(f"  Embedding   : OpenAI text-embedding-3-small compatible ✔")
-    print()
-
-    success, failed = 0, 0
-    for i, path in enumerate(input_paths, 1):
-        if len(input_paths) > 1:
-            print(f"  [{i} of {len(input_paths)}]")
-        ok = process_file(path, args)
-        if ok:
-            success += 1
-        else:
-            failed += 1
-
-    print("  ╔══════════════════════════════════════════════════════════╗")
-    summary = f"  ✔ {success} succeeded    ✖ {failed} failed"
-    print(f"  ║  All done!  {summary:<47}║")
-    print("  ╚══════════════════════════════════════════════════════════╝")
-    print()
-    print("  Next step — pass chunks to your embedder.py:")
-    print()
-    print("    import json, asyncio")
-    print("    from embedder import embed_chunks")
-    print()
-    stem_example = input_paths[0].stem.replace("_meta", "")
-    print(f"    chunks   = json.load(open('{stem_example}_chunks.json'))")
-    print("    embedded = asyncio.run(embed_chunks(chunks))")
-    print()
-
-
-if __name__ == "__main__":
-    main()

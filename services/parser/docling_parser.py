@@ -11,32 +11,17 @@ Features:
   - Chunking-friendly Markdown output
   - Live status spinner with download/processing detection
 
-Supported input formats:
-  PDF, DOCX, PPTX, XLSX, HTML, Markdown, AsciiDoc,
-  PNG, JPEG, TIFF, BMP, WEBP, GIF
-
 Installation:
   pip install docling
   pip install docling[easyocr]   # for EasyOCR (better accuracy)
   pip install hf_xet             # for faster model downloads
 
-Usage:
-  python docling_parser.py input.pdf
-  python docling_parser.py input.pdf --output-dir ./output
-  python docling_parser.py input.pdf --no-picture-annotation
-  python docling_parser.py input.pdf --ocr tesseract
-  python docling_parser.py *.pdf --export-tables-csv
-  python docling_parser.py input.pdf --tableformer-mode accurate
 """
 
-import argparse
+
 import gc
-import itertools
 import json
 import os
-import sys
-import threading
-import time
 from pathlib import Path
 
 # ===========================================================================
@@ -125,9 +110,6 @@ MAX_PAGES = None
 # Maximum file size in bytes (None = no limit). Example: 20971520 = 20 MB
 MAX_FILE_SIZE = None
 
-# Timeout in seconds before aborting a slow document. None = no timeout (may hang)
-# Recommended: 120 for normal use, None only for TEXT_ONLY mode
-CONVERSION_TIMEOUT = 120
 
 # ---------------------------------------------------------------------------
 # ⚡ PERFORMANCE & MEMORY
@@ -145,23 +127,14 @@ ACCELERATOR = "auto"
 # Lower this FIRST if you get std::bad_alloc crashes
 IMAGES_SCALE = 1.0
 
-# Pages held in memory at once. Lower = less RAM.
-# Recommended: 4 for 8GB RAM | 8 for 16GB RAM | 16 for 32GB RAM
-PAGE_BATCH_SIZE = 4
 
 # Custom model cache directory (None = default: ~/.cache/huggingface)
 # Change if your C: drive is full. Example: "D:/ModelCache"
 MODEL_CACHE_DIR = None
 
 
-
-
-
-
-
-
 # ===========================================================================
-
+# Supported file extensions
 # ---------------------------------------------------------------------------
 SUPPORTED_EXTENSIONS = {
     ".pdf",
@@ -175,151 +148,6 @@ SUPPORTED_EXTENSIONS = {
     ".tiff", ".tif", ".bmp",
     ".webp", ".gif",
 }
-
-# ---------------------------------------------------------------------------
-# Model cache paths (to detect if already downloaded)
-# ---------------------------------------------------------------------------
-HF_CACHE = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface"))
-DOCLING_MODEL_CACHE = HF_CACHE / "hub"
-
-
-# ---------------------------------------------------------------------------
-# Spinner
-# ---------------------------------------------------------------------------
-class Spinner:
-    """Animated terminal spinner that runs in a background thread."""
-
-    FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-
-    def __init__(self, message: str = ""):
-        self.message = message
-        self._stop_event = threading.Event()
-        self._thread = threading.Thread(target=self._spin, daemon=True)
-        self._current_line_len = 0
-
-    def _spin(self):
-        for frame in itertools.cycle(self.FRAMES):
-            if self._stop_event.is_set():
-                break
-            line = f"\r  {frame}  {self.message}"
-            sys.stdout.write(line)
-            sys.stdout.flush()
-            self._current_line_len = len(line)
-            time.sleep(0.08)
-
-    def update(self, message: str):
-        self.message = message
-
-    def start(self):
-        self._thread.start()
-        return self
-
-    def stop(self, final_msg: str = "", status: str = "OK"):
-        self._stop_event.set()
-        self._thread.join()
-        sys.stdout.write(f"\r{' ' * (self._current_line_len + 2)}\r")
-        sys.stdout.flush()
-        if final_msg:
-            icon = "✔" if status == "OK" else "✖" if status == "ERROR" else "⚠"
-            print(f"  {icon}  {final_msg}")
-
-    def __enter__(self):
-        self.start()
-        return self
-
-    def __exit__(self, *_):
-        self.stop()
-
-
-# ---------------------------------------------------------------------------
-# Model download detection
-# ---------------------------------------------------------------------------
-def models_are_cached() -> bool:
-    """Return True if Docling models appear to already be downloaded."""
-    if not DOCLING_MODEL_CACHE.exists():
-        return False
-    for item in DOCLING_MODEL_CACHE.iterdir():
-        if "docling" in item.name.lower():
-            return True
-    return False
-
-
-def print_download_notice():
-    width = 58
-    print()
-    print("  ┌" + "─" * width + "┐")
-    print("  │  📥  FIRST-TIME SETUP — DOWNLOADING AI MODELS          │")
-    print("  │                                                          │")
-    print("  │  Docling needs to download its AI models.               │")
-    print("  │  This only happens ONCE and may take 5–20 minutes       │")
-    print("  │  depending on your internet speed (~1–3 GB total).      │")
-    print("  │                                                          │")
-    print("  │  Models will be saved to:                               │")
-    cache_str = str(HF_CACHE)
-    # Wrap long path across two lines if needed
-    if len(cache_str) <= width - 4:
-        print(f"  │  {cache_str:<{width-2}}│")
-    else:
-        print(f"  │  {cache_str[:width-4]+'...':^{width-2}}│")
-    print("  │                                                          │")
-    print("  │  ⚡ Tip: pip install hf_xet  for faster downloads       │")
-    print("  └" + "─" * width + "┘")
-    print()
-
-
-# ---------------------------------------------------------------------------
-# Argument parsing
-# ---------------------------------------------------------------------------
-def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Convert documents to chunking-ready Markdown using Docling.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__,
-    )
-    parser.add_argument(
-        "inputs",
-        nargs="+",
-        metavar="FILE",
-        help="Input file(s) to convert.",
-    )
-    parser.add_argument(
-        "--output-dir", "-o",
-        default=None,
-        metavar="DIR",
-        help="Output directory (overrides saving next to the input file).",
-    )
-    return parser.parse_args()
-
-
-# ---------------------------------------------------------------------------
-def _resolve_ocr_options(ocr_engine: str, force_full_ocr: bool):
-    if ocr_engine == "easyocr":
-        from docling.datamodel.pipeline_options import EasyOcrOptions
-        return EasyOcrOptions(force_full_page_ocr=force_full_ocr)
-
-    elif ocr_engine == "tesseract":
-        try:
-            from docling.datamodel.pipeline_options import TesseractOcrOptions
-            return TesseractOcrOptions(force_full_page_ocr=force_full_ocr)
-        except ImportError:
-            from docling.datamodel.pipeline_options import TesseractCliOcrOptions
-            return TesseractCliOcrOptions(force_full_page_ocr=force_full_ocr)
-
-    elif ocr_engine == "rapidocr":
-        from docling.datamodel.pipeline_options import RapidOcrOptions
-        return RapidOcrOptions(force_full_page_ocr=force_full_ocr)
-
-    else:  # auto
-        try:
-            from docling.datamodel.pipeline_options import AutoOcrOptions
-            return AutoOcrOptions()
-        except ImportError:
-            try:
-                from docling.datamodel.pipeline_options import EasyOcrOptions
-                return EasyOcrOptions(force_full_page_ocr=force_full_ocr)
-            except ImportError:
-                return None
-
 
 # ---------------------------------------------------------------------------
 # Converter builder
@@ -580,49 +408,6 @@ def build_converter():
 
     return DocumentConverter(format_options=format_options)
 
-
-# ---------------------------------------------------------------------------
-def export_tables_to_csv(result, output_dir: Path, stem: str) -> int:
-    from docling_core.types.doc import TableItem
-
-    table_count = 0
-    for item, _level in result.document.iterate_items():
-        if isinstance(item, TableItem):
-            table_count += 1
-            try:
-                df = item.export_to_dataframe()
-                csv_path = output_dir / f"{stem}_table_{table_count}.csv"
-                df.to_csv(csv_path, index=False)
-                print(f"  ✔  Table {table_count} → {csv_path.name}")
-            except Exception as exc:
-                print(f"  ⚠  Could not export table {table_count}: {exc}")
-
-    return table_count
-
-
-# ---------------------------------------------------------------------------
-# Picture annotation summary
-# ---------------------------------------------------------------------------
-def print_picture_annotations(result):
-    from docling_core.types.doc import PictureItem
-
-    pictures = [
-        item
-        for item, _level in result.document.iterate_items()
-        if isinstance(item, PictureItem)
-    ]
-    if not pictures:
-        return
-
-    print(f"\n  📷  {len(pictures)} picture(s) annotated:")
-    for i, pic in enumerate(pictures, 1):
-        for ann in getattr(pic, "annotations", []):
-            desc = getattr(ann, "text", None)
-            if desc:
-                preview = desc[:120] + ("…" if len(desc) > 120 else "")
-                print(f"    [{i}] {preview}")
-
-
 # ---------------------------------------------------------------------------
 # Full content JSON builder
 # ---------------------------------------------------------------------------
@@ -711,7 +496,9 @@ def _build_content_json(result, original_filename: str) -> dict:
         "elements":   elements,
     }
 
-
+# ---------------------------------------------------------------------------
+# Helper tools
+# ---------------------------------------------------------------------------
 def _get_page(item) -> int | None:
     """Safely extract page number from a document item."""
     try:
@@ -727,117 +514,33 @@ def _get_page(item) -> int | None:
         pass
     return None
 
+def _resolve_ocr_options(ocr_engine: str, force_full_ocr: bool):
+    if ocr_engine == "easyocr":
+        from docling.datamodel.pipeline_options import EasyOcrOptions
+        return EasyOcrOptions(force_full_page_ocr=force_full_ocr)
 
-# ---------------------------------------------------------------------------
-# Single file conversion
-# ---------------------------------------------------------------------------
-def convert_file(converter, input_path: Path, output_dir_override=None) -> bool:
-    ext = input_path.suffix.lower()
-    if ext not in SUPPORTED_EXTENSIONS:
-        print(f"  ⚠  Skipping unsupported file type: {input_path.name}")
-        return False
-
-    output_dir = Path(output_dir_override) if output_dir_override else input_path.parent
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    stem = input_path.stem
-    md_path = output_dir /  f"{stem}.md"
-    meta_path = output_dir / f"{stem}_meta.json"
-
-    file_size_mb = input_path.stat().st_size / (1024 * 1024)
-
-    print(f"  {'─'*56}")
-    print(f"  📄  {input_path.name}  ({file_size_mb:.2f} MB)")
-    print(f"  {'─'*56}")
-    print(f"  Output folder : {output_dir}")
-    print()
-
-    # ── Conversion (runs in a thread so spinner can animate) ─────────────────
-    t0 = time.time()
-    result = None
-    error = None
-
-    def do_convert():
-        nonlocal result, error
+    elif ocr_engine == "tesseract":
         try:
-            kwargs = {}
-            if MAX_PAGES:
-                kwargs["max_num_pages"] = MAX_PAGES
-            if MAX_FILE_SIZE:
-                kwargs["max_file_size"] = MAX_FILE_SIZE
-            kwargs["raises_on_error"] = False  # don't crash on bad pages, skip them
-            result = converter.convert(str(input_path), **kwargs)
-        except Exception as exc:
-            error = exc
+            from docling.datamodel.pipeline_options import TesseractOcrOptions
+            return TesseractOcrOptions(force_full_page_ocr=force_full_ocr)
+        except ImportError:
+            from docling.datamodel.pipeline_options import TesseractCliOcrOptions
+            return TesseractCliOcrOptions(force_full_page_ocr=force_full_ocr)
 
-    # Rotating status messages shown while converting
-    stage_messages = [
-        "Analysing document layout…",
-        "Running OCR on scanned pages…",
-        "Extracting and structuring tables…",
-        "Annotating pictures with AI…",
-        "Building Markdown output…",
-        "Still working — large documents take time…",
-    ]
-    stage_cycle = itertools.cycle(stage_messages)
+    elif ocr_engine == "rapidocr":
+        from docling.datamodel.pipeline_options import RapidOcrOptions
+        return RapidOcrOptions(force_full_page_ocr=force_full_ocr)
 
-    spinner = Spinner(next(stage_cycle))
-    spinner.start()
-
-    convert_thread = threading.Thread(target=do_convert, daemon=True)
-    convert_thread.start()
-
-    last_update = time.time()
-    stage_interval = 5.0  # seconds between message rotations
-
-    while convert_thread.is_alive():
-        if time.time() - last_update >= stage_interval:
-            spinner.update(next(stage_cycle))
-            last_update = time.time()
-        time.sleep(0.1)
-
-    convert_thread.join()
-    elapsed = time.time() - t0
-
-    if error:
-        spinner.stop(f"Conversion failed: {error}", status="ERROR")
-        return False
-
-    spinner.stop(f"Document parsed successfully in {elapsed:.1f}s", status="OK")
-    gc.collect()  # release page buffers immediately after parsing
-
-    # ── Save Markdown ─────────────────────────────────────────────────────────
-    with Spinner("Saving Markdown…"):
-        markdown = result.document.export_to_markdown()
-        md_path.write_text(markdown, encoding="utf-8")
-    print(f"  ✔  Markdown  → {md_path.name}")
-
-    # ── Save content JSON (full resolved text, tables, picture annotations) ──
-    try:
-        with Spinner("Saving content JSON…"):
-            content_json = _build_content_json(result, input_path.name)
-            with open(meta_path, "w", encoding="utf-8") as f:
-                json.dump(content_json, f, indent=2, ensure_ascii=False, default=str)
-        print(f"  ✔  Content JSON → {meta_path.name}")
-    except Exception as exc:
-        print(f"  ⚠  Could not export content JSON: {exc}")
-
-    # ── Export tables to CSV ──────────────────────────────────────────────────
-    if EXPORT_TABLES_CSV:
-        with Spinner("Exporting tables to CSV…"):
-            time.sleep(0.3)
-        n = export_tables_to_csv(result, output_dir, stem)
-        if n == 0:
-            print("  ℹ  No tables detected in this document.")
-
-    # ── Summary ───────────────────────────────────────────────────────────────
-    pages = getattr(result.document, "num_pages", None) or "?"
-    print(f"\n  ✅  Finished!  Pages: {pages}  |  Total time: {elapsed:.1f}s")
-
-    if ENABLE_PICTURE_ANNOTATION:
-        print_picture_annotations(result)
-
-    return True
+    else:  # auto
+        try:
+            from docling.datamodel.pipeline_options import AutoOcrOptions
+            return AutoOcrOptions()
+        except ImportError:
+            try:
+                from docling.datamodel.pipeline_options import EasyOcrOptions
+                return EasyOcrOptions(force_full_page_ocr=force_full_ocr)
+            except ImportError:
+                return None
 
 
 # ---------------------------------------------------------------------------
@@ -846,6 +549,11 @@ def convert_file(converter, input_path: Path, output_dir_override=None) -> bool:
 async def parse_with_docling(file_bytes: bytes, file_name: str, mime_type: str) -> str:
     import tempfile
 
+    ext = Path(file_name).suffix.lower()
+    if ext not in SUPPORTED_EXTENSIONS:
+        print(f"  ⚠  Skipping unsupported file type: {file_name}")
+        return False
+    
     # ── Apply CPU/memory settings from config ─────────────────────────────────
     if CPU_THREADS is not None:
         try:
