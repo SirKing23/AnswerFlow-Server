@@ -107,43 +107,44 @@ async def process_file_pipeline(
             raise ValueError("Chunking produced no chunks")
 
 
-        print(f"[pipeline] Chunking complete: {len(chunks)} chunks created for file {file_name}")
-        for i, chunk in enumerate(chunks):
-            print(f"Chunk {i}: {chunk}")
+       # print(f"[pipeline] Chunking complete: {len(chunks)} chunks created for file {file_name}")
+       ## for i, chunk in enumerate(chunks):
+       #     print(f"Chunk {i}: {chunk}")
 
         # ── 6. Embed ──────────────────────────────────────────────────
-        #await _set_status(user_file_id, job_id, "Embedding")
-       # embedded_chunks = await embed_chunks(chunks)
+        await _set_status(user_file_id, job_id, "Embedding")
+        embedded_chunks = await embed_chunks(chunks)
 
         # ── 7. Store embeddings ───────────────────────────────────────
-      #  await _set_status(user_file_id, job_id, "Storing")
+        await _set_status(user_file_id, job_id, "Storing")
 
-        # rows = [
-        #     {
-        #         # Match your exact document_embeddings column names
-        #         "user_id":     user_id,
-        #         "job_id":      job_id,
-        #         "file_path":   storage_path,
-        #         "filename":    file_name,
-        #         "file_type":   mime_type,
-        #         "chunk_index": chunk["chunk_index"],
-        #         "content":     chunk["content"],
-        #         "embedding":   chunk["embedding"],
-        #         "metadata":    chunk["metadata"],
-        #         # inserted_at and created_at are handled by Supabase defaults
-        #     }
-        #     for chunk in embedded_chunks
-        # ]
+        rows = [
+            {
+                # Match your exact document_embeddings column names
+                "user_id":     user_id,
+                "job_id":      job_id,
+                "file_path":   storage_path,
+                "filename":    file_name,
+                "file_type":   mime_type,
+                "chunk_index": chunk["chunk_index"],
+                "content":     chunk["content"],
+                "embedding":   chunk["embedding"],
+                "metadata":    chunk["metadata"],
+                # inserted_at and created_at are handled by Supabase defaults
+            }
+            for chunk in embedded_chunks
+        ]
 
-       # await store_embeddings(rows)
+        await store_embeddings(rows)
 
         # ── 8. Mark done ──────────────────────────────────────────────
-        # await update_job_status(job_id, "Completed", chunk_count=len(chunks))
-        # await update_file_status(
-        #     user_file_id, "Completed",
-        #     content_hash=content_hash,
-        #     processed_at=True
-        # )
+        await update_job_status(job_id, "Completed", chunk_count=len(chunks))
+
+        await update_file_status(
+            user_file_id, "Completed",
+            content_hash=content_hash,
+            processed_at=True
+        )
 
     except Exception as e:
         error_msg = str(e)
