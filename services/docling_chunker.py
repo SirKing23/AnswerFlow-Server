@@ -369,9 +369,20 @@ def chunk_elements(
         # Build chunk content
         content = "\n\n".join(u["text"] for u in current_units).strip()
 
-        # Use the headings from the last unit in the chunk (most specific)
-        headings = current_units[-1]["headings"]
-        section  = headings[-1] if headings else ""
+       # Use headings from the chunk's heading context — never from tables/text
+        # Find the most recent heading seen across all units in this chunk
+        headings = []
+        for u in current_units:
+            if u["element_type"] == "heading":
+                headings = u["headings"]
+            elif u["headings"] and not headings:
+                headings = u["headings"]
+        # Clean headings — remove any that look like table content
+        headings = [
+            h for h in headings
+            if len(h) < 200 and not h.strip().startswith("|")
+        ]
+        section = headings[-1] if headings else ""
 
         # Collect element types for metadata transparency
         element_types = [u["element_type"] for u in current_units]

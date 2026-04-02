@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 if BASE_DIR not in sys.path:
@@ -80,7 +81,27 @@ async def process_file_pipeline(
 
         # ── 5. Chunk ──────────────────────────────────────────────────
         await _set_status(user_file_id, job_id, "Chunking")
-        chunks = chunk_markdown(text, file_name=file_name)
+        # Try to use structured elements from parse_file if available
+        # parse_file may return a JSON string (from docling) or plain markdown
+        try:
+            parsed = json.loads(text)
+            if "elements" in parsed:
+                # Rich structured output from docling_parser
+                from docling_chunker import chunk_elements, DEFAULT_CHUNK_SIZE, DEFAULT_OVERLAP
+                chunks = chunk_elements(
+                    parsed["elements"],
+                    source_filename=file_name,
+                    chunk_size=DEFAULT_CHUNK_SIZE,
+                    overlap=DEFAULT_OVERLAP,
+                )
+            else:
+                raise ValueError("Not structured elements")
+        except (json.JSONDecodeError, ValueError):
+            # Fallback: plain markdown from old parser
+            chunks = chunk_markdown(text, file_name=file_name)
+
+        if not chunks:
+            raise ValueError("Chunking produced no chunks")
 
         if not chunks:
             raise ValueError("Chunking produced no chunks")

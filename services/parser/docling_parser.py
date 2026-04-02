@@ -79,8 +79,8 @@ TABLEFORMER_MODE = "accurate"     # "accurate" = best quality, slower  |  "fast"
 # Each size downloads once and stays cached — switching is free after that.
 SMOLVLM_MODEL = "256M"
 
-ENABLE_PICTURE_ANNOTATION    = True    # False = skip image descriptions (saves RAM)
-ENABLE_PICTURE_CLASSIFICATION = True  # True  = classify image type (photo/chart/diagram)
+ENABLE_PICTURE_ANNOTATION    = False    # False = skip image descriptions (saves RAM)
+ENABLE_PICTURE_CLASSIFICATION = False  # True  = classify image type (photo/chart/diagram)
 PICTURE_PROMPT = "Describe the image in three concise sentences. Be accurate and specific."
 
 # Code and formula enrichment (experimental — needs extra models, slower)
@@ -664,16 +664,16 @@ def _build_content_json(result, original_filename: str) -> dict:
         # ── Tables ────────────────────────────────────────────────────────
         elif isinstance(item, TableItem):
             try:
-                df = item.export_to_dataframe()
+                df = item.export_to_dataframe(doc=doc)
                 rows = [df.columns.tolist()] + df.values.tolist()
                 table_data = [[str(cell) for cell in row] for row in rows]
             except Exception:
                 table_data = []
-            # Also export as markdown for readability
             try:
-                table_md = item.export_to_markdown()
+                table_md = item.export_to_markdown(doc=doc)
             except Exception:
                 table_md = ""
+                
             elements.append({
                 "type":     "table",
                 "page":     _get_page(item),
@@ -695,7 +695,15 @@ def _build_content_json(result, original_filename: str) -> dict:
             })
 
     # ── Page count ────────────────────────────────────────────────────────────
-    num_pages = getattr(doc, "num_pages", None)
+    # num_pages may be a property, method, or plain int depending on version
+    try:
+        num_pages = doc.num_pages
+        if callable(num_pages):
+            num_pages = num_pages()
+        num_pages = int(num_pages) if num_pages is not None else None
+    except Exception:
+        num_pages = None
+
 
     return {
         "filename":   original_filename,
@@ -709,7 +717,12 @@ def _get_page(item) -> int | None:
     try:
         prov = item.prov
         if prov:
-            return prov[0].page_no
+            p = prov[0]
+            # page_no is the attribute in newer docling_core
+            for attr in ("page_no", "page", "page_number"):
+                val = getattr(p, attr, None)
+                if val is not None:
+                    return int(val)
     except (AttributeError, IndexError, TypeError):
         pass
     return None
@@ -865,6 +878,17 @@ async def parse_with_docling(file_bytes: bytes, file_name: str, mime_type: str) 
         result = converter.convert(str(tmp_path), **kwargs)
         gc.collect()
 
+        # Return structured JSON so pipelineDocument.py can use
+        # page numbers, headings and element types in chunk metadata.
+        # pipelineDocument.py detects this and calls chunk_elements()
+        # instead of chunk_markdown() — falling back to markdown if needed.
+        content_json = _build_content_json(result, file_name)
+
+        if content_json["elements"]:
+            return json.dumps(content_json, ensure_ascii=False)
+
+        # Fallback — if elements are empty (e.g. pure image PDF with no OCR)
+        # return plain markdown so the pipeline doesn't get empty output
         return result.document.export_to_markdown()
     finally:
         tmp_path.unlink(missing_ok=True)
