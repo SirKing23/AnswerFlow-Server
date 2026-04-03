@@ -14,6 +14,7 @@ from ai.tools import (
     get_run_context,
     clear_run_context,
 )
+
 from config import OPENAI_API_KEY, OPENAI_CHAT_MODEL
 import os as _os
 _os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
@@ -79,14 +80,15 @@ async def run_agent(
         name="RAG Orchestrator",
         instructions=ORCHESTRATOR_INSTRUCTIONS,
         model=OPENAI_CHAT_MODEL,
-        model_settings=ModelSettings(parallel_tool_calls=False),
+        model_settings=ModelSettings(parallel_tool_calls=False,temperature=0.7,presence_penalty=0.3,max_tokens=2048),
         tools=[
             query_decomposer_tool,
             user_query_embedder_tool,
             search_chunks_tool,
             context_builder_tool,
             answer_validator_tool,
-        ],
+        ]
+        
     )
 
     history_text = ""
@@ -106,7 +108,7 @@ async def run_agent(
     )
 
     try:
-        result = await Runner.run(agent, agent_input)
+        result = await Runner.run(agent, agent_input, max_turns=25)
         final_answer = result.final_output
         ctx     = get_run_context(run_id)
         sources = ctx.get("sources", [])

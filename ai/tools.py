@@ -248,7 +248,10 @@ async def context_builder_tool(input: ContextBuilderInput) -> str:
             "filename":    c["filename"],
             "chunk_index": c["chunk_index"],
             "similarity":  round(c["similarity"], 3),
-            "excerpt":     c["content"][:200] + "..." if len(c["content"]) > 200 else c["content"]
+            "excerpt":     c["content"][:200] + "..." if len(c["content"]) > 200 else c["content"],
+            "file_name":   (c.get("metadata") or {}).get("file_name"),
+            "page":        (c.get("metadata") or {}).get("page"),
+            "section":     (c.get("metadata") or {}).get("section"),
         }
         for c in chunks
     ]

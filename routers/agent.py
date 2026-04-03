@@ -50,6 +50,7 @@ async def agent_chat(request: Request, body: AgentRequest):
     user_id = await verify_jwt(request)
 
     history = [{"role": m.role, "content": m.content} for m in body.history]
+  
 
     result = await run_agent(
         user_id=user_id,
