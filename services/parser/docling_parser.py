@@ -19,6 +19,7 @@ Installation:
 """
 
 
+import asyncio
 import gc
 import json
 import os
@@ -575,16 +576,23 @@ async def parse_with_docling(file_bytes: bytes, file_name: str, mime_type: str) 
     input_paths = [tmp_path]
 
     try:
-        converter = build_converter()
-
+        # Build kwargs before entering the thread
         kwargs = {"raises_on_error": False}
         if MAX_PAGES:
             kwargs["max_num_pages"] = MAX_PAGES
         if MAX_FILE_SIZE:
             kwargs["max_file_size"] = MAX_FILE_SIZE
 
-        result = converter.convert(str(tmp_path), **kwargs)
-        gc.collect()
+        # Run it in a thread pool so the event loop stays free
+        # to serve chat requests while this file is being processed.
+        def _blocking_convert():
+            converter = build_converter()
+            result = converter.convert(str(tmp_path), **kwargs)
+            gc.collect()
+            return result
+
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, _blocking_convert)
 
         # Return structured JSON so pipelineDocument.py can use
         # page numbers, headings and element types in chunk metadata.
@@ -595,8 +603,6 @@ async def parse_with_docling(file_bytes: bytes, file_name: str, mime_type: str) 
         if content_json["elements"]:
             return json.dumps(content_json, ensure_ascii=False)
 
-        # Fallback — if elements are empty (e.g. pure image PDF with no OCR)
-        # return plain markdown so the pipeline doesn't get empty output
         return result.document.export_to_markdown()
     finally:
         tmp_path.unlink(missing_ok=True)
