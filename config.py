@@ -8,6 +8,7 @@ SUPABASE_URL              = os.environ["SUPABASE_URL"]
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 SUPABASE_JWT_SECRET       = os.environ["SUPABASE_JWT_SECRET"]
 
+
 # OpenAI
 OPENAI_API_KEY            = os.environ["OPENAI_API_KEY"]
 OPENAI_EMBEDDING_MODEL    = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
@@ -19,6 +20,8 @@ UNSTRUCTURED_API_URL      = os.getenv(
     "UNSTRUCTURED_API_URL",
     "https://api.unstructuredapp.io/general/v0/general"
 )
+
+
 
 # Security
 WEBHOOK_SECRET            = os.environ["WEBHOOK_SECRET"]
