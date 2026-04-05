@@ -1,4 +1,4 @@
-import sys, os
+import sys, os, json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents import function_tool
@@ -12,20 +12,20 @@ from config import OPENAI_API_KEY
 _openai = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 # ── Shared run context ────────────────────────────────────────────────────────
-# Module-level dict keyed by run_id so tools share state within one agent run.
-# e.g. embedding created in user_query_embedder_tool is reused by search_chunks_tool
 _run_context: dict = {}
 
 
 def set_run_context(run_id: str, user_id: str, file_id: Optional[str]):
     _run_context[run_id] = {
-        "user_id":   user_id,
-        "file_id":   file_id,
-        "embedding": None,
-        "chunks":    [],
-        "enriched_context": "",
-        "sources":   [],
+        "user_id":            user_id,
+        "file_id":            file_id,
+        "embedding":          None,
+        "chunks":             [],
+        "enriched_context":   "",
+        "sources":            [],
         "decomposed_queries": "",
+        "graph_results":      [],
+        "graph_entities":     [],
     }
 
 
@@ -35,6 +35,19 @@ def get_run_context(run_id: str) -> dict:
 
 def clear_run_context(run_id: str):
     _run_context.pop(run_id, None)
+
+
+# ── Logging helpers ───────────────────────────────────────────────────────────
+
+def _banner(title: str):
+    print("\n" + "=" * 62)
+    print(f"  {title}")
+    print("=" * 62)
+
+def _ok(msg: str):   print(f"  OK   {msg}")
+def _warn(msg: str): print(f"  WARN {msg}")
+def _info(msg: str): print(f"       {msg}")
+def _end():          print("=" * 62 + "\n")
 
 
 # ── Tool 1: user_query_embedder_tool ─────────────────────────────────────────
@@ -50,14 +63,13 @@ async def user_query_embedder_tool(input: EmbedInput) -> str:
     Embeds any text into a vector using OpenAI text-embedding-3-small.
     Always call this first before search_chunks_tool.
     Stores the embedding in run context so search_chunks_tool can reuse it.
-    Returns a confirmation that embedding was created.
     """
     embedding = await embed_single(input.text)
     ctx = _run_context.get(input.run_id, {})
     ctx["embedding"] = embedding
     _run_context[input.run_id] = ctx
-    print(f"[user_query_embedder_tool] created embedding with {len(embedding)} dimensions")
-    return f"Embedding created successfully ({len(embedding)} dimensions). Ready for search."
+    print(f"[embedder] {len(embedding)}d vector created for: {input.text[:60]}")
+    return f"Embedding created ({len(embedding)} dimensions). Ready for search."
 
 
 # ── Tool 2: search_chunks_tool ────────────────────────────────────────────────
@@ -71,10 +83,9 @@ class SearchInput(BaseModel):
 @function_tool
 async def search_chunks_tool(input: SearchInput) -> str:
     """
-    Searches the user's vector database for chunks relevant to the embedded query.
-    Must call user_query_embedder_tool first to create the embedding.
-    Respects file_id scoping — if file_id was provided, only searches that file.
-    Returns the top matching chunks with their source file and similarity score.
+    Searches the user's pgvector database for chunks semantically similar to the embedded query.
+    Must call user_query_embedder_tool first.
+    Respects file_id scoping — searches one file or all files depending on context.
     """
     ctx       = _run_context.get(input.run_id, {})
     embedding = ctx.get("embedding")
@@ -82,11 +93,14 @@ async def search_chunks_tool(input: SearchInput) -> str:
     file_id   = ctx.get("file_id")
 
     if not embedding:
-        print("[search_chunks_tool] Error: No embedding found in context")
         return "Error: No embedding found. Call user_query_embedder_tool first."
     if not user_id:
-        print("[search_chunks_tool] Error: No user_id in context")
         return "Error: No user_id in context."
+
+    _banner("SUPABASE pgvector HIT -- search_chunks_tool")
+    _info(f"user_id   : {user_id}")
+    _info(f"file_id   : {file_id or 'all files'}")
+    _info(f"threshold : {input.similarity_threshold}  |  top-k: {input.match_count}")
 
     supabase = get_supabase()
 
@@ -98,7 +112,6 @@ async def search_chunks_tool(input: SearchInput) -> str:
             "match_count":          input.match_count,
             "similarity_threshold": input.similarity_threshold,
         }).execute()
-        print(f"[search_chunks_tool] via file_id={file_id} found {len(result.data or [])} chunks.  user_id={user_id}")
     else:
         result = supabase.rpc("match_chunks", {
             "query_embedding":      embedding,
@@ -106,13 +119,18 @@ async def search_chunks_tool(input: SearchInput) -> str:
             "match_count":          input.match_count,
             "similarity_threshold": input.similarity_threshold,
         }).execute()
-        print(f"[search_chunks_tool] found {len(result.data or [])} chunks  from general search. user_id={user_id}")
 
     chunks = result.data or []
 
     if not chunks:
-        print("[search_chunks_tool] No relevant chunks found")
+        _warn("pgvector returned 0 chunks")
+        _end()
         return "No relevant chunks found in the user's documents for this query."
+
+    _ok(f"pgvector returned {len(chunks)} chunk(s):")
+    for c in chunks:
+        _info(f"  [{c['filename']}] chunk={c['chunk_index']} sim={round(c['similarity'], 3)}")
+    _end()
 
     ctx["chunks"] = chunks
     _run_context[input.run_id] = ctx
@@ -124,15 +142,10 @@ async def search_chunks_tool(input: SearchInput) -> str:
             f"Similarity: {round(chunk['similarity'], 3)}\n"
             f"{chunk['content'][:300]}{'...' if len(chunk['content']) > 300 else ''}\n"
         )
-    
-    print(f"[search_chunks_tool] found {len(chunks)} chunks")
     return "\n".join(lines)
 
 
 # ── Tool 3: query_decomposer_tool ─────────────────────────────────────────────
-# Breaks complex multi-part questions into focused sub-queries.
-# Useful when user asks compound questions like:
-# "Compare section 3 and section 5 and tell me which is more important"
 
 class DecomposeInput(BaseModel):
     run_id: str = Field(description="The current run ID for context sharing")
@@ -142,9 +155,9 @@ class DecomposeInput(BaseModel):
 @function_tool
 async def query_decomposer_tool(input: DecomposeInput) -> str:
     """
-    Analyzes the user's query and breaks it into focused sub-questions if complex.
-    Use this when the query is multi-part, ambiguous, or requires multiple searches.
-    Returns either the original query (if simple) or a numbered list of sub-queries.
+    Breaks complex multi-part questions into focused sub-queries for better retrieval.
+    Use only when the question is complex, multi-part, or ambiguous.
+    Skip for simple focused questions.
     """
     response = await _openai.chat.completions.create(
         model="gpt-4o-mini",
@@ -152,11 +165,10 @@ async def query_decomposer_tool(input: DecomposeInput) -> str:
             {
                 "role": "system",
                 "content": (
-                    "You are a query analysis expert. Analyze the given question and determine "
-                    "if it needs to be broken into sub-questions for better document retrieval. "
-                    "If the question is simple and focused, return it as-is. "
-                    "If it is complex or multi-part, break it into 2-4 focused sub-questions. "
-                    "Return ONLY the question(s), numbered if multiple, nothing else."
+                    "You are a query analysis expert. Determine if the question needs "
+                    "breaking into sub-questions for better document retrieval. "
+                    "If simple, return as-is. If complex, break into 2-4 focused sub-questions. "
+                    "Return ONLY the question(s), numbered if multiple."
                 )
             },
             {"role": "user", "content": input.query}
@@ -168,49 +180,71 @@ async def query_decomposer_tool(input: DecomposeInput) -> str:
     ctx = _run_context.get(input.run_id, {})
     ctx["decomposed_queries"] = result
     _run_context[input.run_id] = ctx
-
-    print(f"[query_decomposer_tool] decomposed queries: {result}")
+    print(f"[decomposer] => {result[:120]}")
     return result
 
 
 # ── Tool 4: context_builder_tool ──────────────────────────────────────────────
 
 class ChatMessage(BaseModel):
-    role:    str = Field(description="Role of the message sender: user or assistant")
-    content: str = Field(description="Content of the message")
+    role:    str = Field(description="user or assistant")
+    content: str = Field(description="Message content")
 
 
 class ContextBuilderInput(BaseModel):
-    run_id:       str             = Field(description="The current run ID for context sharing")
-    user_query:   str             = Field(description="The user's original question")
+    run_id:       str               = Field(description="The current run ID for context sharing")
+    user_query:   str               = Field(description="The user's original question")
     chat_history: list[ChatMessage] = Field(default=[], description="Previous conversation messages")
 
 
 @function_tool
 async def context_builder_tool(input: ContextBuilderInput) -> str:
     """
-    Analyzes retrieved chunks alongside user query and chat history to build
-    a rich coherent context. Filters irrelevant chunks, resolves pronoun
-    references from history, and structures context for optimal LLM comprehension.
-    Always call this after search_chunks_tool and before generating the final answer.
+    Fuses vector search chunks AND knowledge graph results into one coherent context.
+    Always call this after search_chunks_tool and/or graph_search_tool.
+    Filters irrelevant content, resolves pronoun references from history,
+    and incorporates entity relationship data from the graph.
+    Call before answer_validator_tool.
     """
-    ctx    = _run_context.get(input.run_id, {})
-    chunks = ctx.get("chunks", [])
+    ctx           = _run_context.get(input.run_id, {})
+    chunks        = ctx.get("chunks", [])
+    graph_results = ctx.get("graph_results", [])
 
-    if not chunks:
-        return "No chunks available. Run search_chunks_tool first."
+    if not chunks and not graph_results:
+        return "No results to build context from. Run search_chunks_tool or graph_search_tool first."
 
-    raw_context = "\n\n---\n\n".join([
+    _banner("context_builder_tool -- fusing sources")
+    _info(f"vector chunks : {len(chunks)}")
+    _info(f"graph results : {len(graph_results)}")
+    if graph_results:
+        _info("graph results included:")
+        for r in graph_results:
+            _info(f"  {r['file_name']} => {r.get('matched_entities', [])}")
+    _end()
+
+    chunk_section = "\n\n---\n\n".join([
         f"[Source: {c['filename']} | Chunk {c['chunk_index']}]\n{c['content']}"
         for c in chunks
-    ])
+    ]) if chunks else "No vector chunks retrieved."
 
-    history_text = ""
-    if input.chat_history:
-        history_text = "\n".join([
-            f"{m.role.upper()}: {m.content}"
-            for m in input.chat_history[-6:]
-        ])
+    graph_section = ""
+    if graph_results:
+        lines = ["Knowledge graph findings:"]
+        for r in graph_results:
+            matched = ", ".join(r.get("matched_entities", []))
+            related = ", ".join(r.get("related_entities", [])[:5])
+            lines.append(
+                f"  File: {r['file_name']} | "
+                f"Matched entities: {matched} | "
+                f"Related entities: {related or 'none'}"
+            )
+        graph_section = "\n".join(lines)
+
+    history_text = "\n".join([
+        f"{m.role.upper()}: {m.content}" for m in input.chat_history[-6:]
+    ]) if input.chat_history else "None"
+
+    combined = f"{chunk_section}\n\n{graph_section}".strip()
 
     response = await _openai.chat.completions.create(
         model="gpt-4o-mini",
@@ -218,21 +252,21 @@ async def context_builder_tool(input: ContextBuilderInput) -> str:
             {
                 "role": "system",
                 "content": (
-                    "You are a context analyst. Given retrieved document chunks, "
-                    "a user query, and optional chat history, your job is to:\n"
-                    "1. Filter out chunks clearly irrelevant to the query\n"
+                    "You are a context analyst. Given vector search chunks and knowledge "
+                    "graph findings, your job is to:\n"
+                    "1. Filter out content clearly irrelevant to the query\n"
                     "2. Resolve pronouns or references using chat history\n"
-                    "3. Organize remaining chunks logically\n"
-                    "4. Return cleaned structured context ready for answering\n"
-                    "Keep all source labels intact. Do not add information not in the chunks."
+                    "3. Incorporate entity relationships from graph findings\n"
+                    "4. Organize everything logically for answering the question\n"
+                    "Keep all source labels intact. Do not add outside information."
                 )
             },
             {
                 "role": "user",
                 "content": (
                     f"User Query: {input.user_query}\n\n"
-                    f"Chat History:\n{history_text or 'None'}\n\n"
-                    f"Retrieved Chunks:\n{raw_context}"
+                    f"Chat History:\n{history_text}\n\n"
+                    f"Retrieved Content:\n{combined}"
                 )
             }
         ],
@@ -240,9 +274,8 @@ async def context_builder_tool(input: ContextBuilderInput) -> str:
         max_tokens=1500,
     )
 
-    enriched_context = response.choices[0].message.content.strip()
-
-    ctx["enriched_context"] = enriched_context
+    enriched = response.choices[0].message.content.strip()
+    ctx["enriched_context"] = enriched
     ctx["sources"] = [
         {
             "filename":    c["filename"],
@@ -256,15 +289,10 @@ async def context_builder_tool(input: ContextBuilderInput) -> str:
         for c in chunks
     ]
     _run_context[input.run_id] = ctx
-
-    print(f"[context_builder_tool] enriched context: {enriched_context}")
-    return enriched_context
+    return enriched
 
 
 # ── Tool 5: answer_validator_tool ─────────────────────────────────────────────
-# Validates the final answer is grounded in retrieved context.
-# Catches hallucinations — claims not supported by source documents.
-# Returns VALID or lists specific unsupported claims for the orchestrator to fix.
 
 class ValidatorInput(BaseModel):
     run_id: str = Field(description="The current run ID for context sharing")
@@ -274,10 +302,9 @@ class ValidatorInput(BaseModel):
 @function_tool
 async def answer_validator_tool(input: ValidatorInput) -> str:
     """
-    Validates that the proposed answer is fully grounded in retrieved document chunks.
-    Detects hallucinations — claims not supported by the source documents.
-    Returns 'VALID' if grounded, or lists unsupported claims to fix.
-    Always call this before returning the final answer to the user.
+    Validates the proposed answer is grounded in retrieved context.
+    Returns 'VALID' if fully supported, or lists unsupported claims.
+    Always call this before returning the final answer.
     """
     ctx     = _run_context.get(input.run_id, {})
     context = ctx.get("enriched_context", "")
@@ -291,21 +318,361 @@ async def answer_validator_tool(input: ValidatorInput) -> str:
             {
                 "role": "system",
                 "content": (
-                    "You are a fact-checking assistant. Given context from documents "
-                    "and a proposed answer, check if every claim in the answer is "
-                    "supported by the context. "
-                    "Reply with exactly 'VALID' if fully grounded. "
+                    "You are a fact-checking assistant. Check if every claim in the answer "
+                    "is supported by the context. Reply 'VALID' if fully grounded. "
                     "Otherwise list each unsupported claim starting with '- UNSUPPORTED:'"
                 )
             },
             {
                 "role": "user",
-                "content": f"Context:\n{context}\n\nAnswer to validate:\n{input.answer}"
+                "content": f"Context:\n{context}\n\nAnswer:\n{input.answer}"
             }
         ],
         temperature=0.0,
         max_tokens=400,
     )
     result = response.choices[0].message.content.strip()
-    print(f"[answer_validator_tool] validation result: {result}")
+    verdict = "VALID" if result.strip() == "VALID" else "ISSUES FOUND"
+    print(f"[validator] {verdict} -- {result[:100]}")
     return result
+
+
+# ── Tool 6: graph_search_tool ─────────────────────────────────────────────────
+
+class GraphSearchInput(BaseModel):
+    run_id:     str = Field(description="The current run ID for context sharing")
+    user_query: str = Field(description="The question or sub-query to search the knowledge graph for")
+    max_hops:   int = Field(default=2, description="Relationship hops to traverse (1 or 2)")
+
+
+async def _extract_query_entities(text: str) -> list[str]:
+    """NER pass on query text -- returns entity name strings only."""
+    response = await _openai.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "Extract named entities (people, companies, places, products, concepts) "
+                    "from the user's question. Return ONLY a JSON object with key entities "
+                    "containing an array of name strings. "
+                    "Example: {\"entities\": [\"Acme Corp\", \"Manila\"]}. "
+                    "Return {\"entities\": []} if no clear named entities exist."
+                )
+            },
+            {"role": "user", "content": text[:500]},
+        ],
+        temperature=0.0,
+        max_tokens=150,
+        response_format={"type": "json_object"},
+    )
+    try:
+        parsed = json.loads(response.choices[0].message.content)
+        return [str(x).strip() for x in parsed.get("entities", []) if x]
+    except Exception:
+        return []
+
+
+@function_tool
+async def graph_search_tool(input: GraphSearchInput) -> str:
+    """
+    Searches the Neo4j Aura knowledge graph for documents and entities related to the query.
+
+    Use this when:
+    - The question mentions specific people, companies, locations, or named concepts
+    - The question asks about relationships between things
+    - Vector search returned weak or no results for an entity-heavy question
+    - The user asks about a specific named thing across documents
+
+    Complements search_chunks_tool -- run both, then context_builder_tool fuses the results.
+    """
+    from utils.neo4j_client import graph_search
+
+    ctx     = _run_context.get(input.run_id, {})
+    user_id = ctx.get("user_id")
+
+    if not user_id:
+        return "Error: No user_id in context."
+
+    _banner("NEO4J AURA HIT -- graph_search_tool")
+    _info(f"run_id  : {input.run_id}")
+    _info(f"user_id : {user_id}")
+    _info(f"query   : {input.user_query[:80]}")
+
+    entity_names = await _extract_query_entities(input.user_query)
+    _info(f"NER entities : {entity_names}")
+
+    if not entity_names:
+        _warn("No named entities found -- skipping Cypher query")
+        _end()
+        return (
+            "No named entities detected -- graph search needs a specific name to look up. "
+            "Use search_chunks_tool for semantic search instead."
+        )
+
+    _info(f"Running Cypher on Neo4j Aura for: {entity_names}")
+    results = await graph_search(
+        user_id=user_id,
+        entity_names=entity_names,
+        max_hops=input.max_hops,
+        limit=8,
+    )
+
+    if not results:
+        _warn(f"Neo4j returned 0 documents for: {entity_names}")
+        _end()
+        return (
+            f"No documents found in the knowledge graph for: {', '.join(entity_names)}. "
+            "Try search_chunks_tool for a broader semantic search."
+        )
+
+    _ok(f"Neo4j returned {len(results)} document(s):")
+    for r in results:
+        matched = ", ".join(r.get("matched_entities", []))
+        related = ", ".join(r.get("related_entities", [])[:5])
+        _info(f"  {r['file_name']}  score={r.get('relevance_score', 0)}")
+        _info(f"    matched : [{matched}]")
+        _info(f"    related : [{related or 'none'}]")
+    _end()
+
+    ctx["graph_results"]  = results
+    ctx["graph_entities"] = entity_names
+    _run_context[input.run_id] = ctx
+
+    lines = [f"Knowledge graph results for: {', '.join(entity_names)}\n"]
+    for r in results:
+        matched = ", ".join(r.get("matched_entities", []))
+        related = ", ".join(r.get("related_entities", [])[:5])
+        lines.append(
+            f"File: {r['file_name']} | Score: {r.get('relevance_score', 0)}\n"
+            f"  Matched entities : {matched}\n"
+            f"  Related entities : {related or 'none'}\n"
+        )
+    return "\n".join(lines)
+
+
+# ── Tool 7: entity_explorer_tool ──────────────────────────────────────────────
+
+class EntityExploreInput(BaseModel):
+    run_id:      str = Field(description="The current run ID for context sharing")
+    entity_name: str = Field(description="Exact entity name to explore as it appears in documents")
+
+
+@function_tool
+async def entity_explorer_tool(input: EntityExploreInput) -> str:
+    """
+    Returns all entities directly connected to a named entity in the Neo4j knowledge graph.
+
+    Use this when:
+    - The user asks what is X connected to or tell me everything about X
+    - You found an entity via graph_search_tool and want to explore its neighborhood
+    - You want to discover related topics before running a targeted vector search
+
+    Returns neighbor entities with their relationship types.
+    """
+    from utils.neo4j_client import get_entity_neighbors
+
+    ctx     = _run_context.get(input.run_id, {})
+    user_id = ctx.get("user_id")
+
+    if not user_id:
+        return "Error: No user_id in context."
+
+    _banner("NEO4J AURA HIT -- entity_explorer_tool")
+    _info(f"user_id     : {user_id}")
+    _info(f"entity_name : {input.entity_name}")
+
+    neighbors = await get_entity_neighbors(
+        user_id=user_id,
+        entity_name=input.entity_name,
+        limit=15,
+    )
+
+    if not neighbors:
+        _warn(f"No connections found for '{input.entity_name}'")
+        _end()
+        return (
+            f"No connections found for '{input.entity_name}'. "
+            "It may not exist in the graph or may be stored under a slightly different name."
+        )
+
+    _ok(f"Neo4j returned {len(neighbors)} neighbor(s) for '{input.entity_name}':")
+    for n in neighbors:
+        _info(f"  {n['neighbor']} ({n['type']})  <->  {n['relation']}")
+    _end()
+
+    lines = [f"Connections for '{input.entity_name}':\n"]
+    for n in neighbors:
+        lines.append(f"  {n['neighbor']} ({n['type']})  <->  {n['relation']}")
+    return "\n".join(lines)
+
+
+# ── Tool 8: text2cypher_tool ──────────────────────────────────────────────────
+
+# Graph schema description injected into the LLM prompt so it knows
+# exactly what nodes, properties, and relationships exist.
+# Update this if you add new labels or relationship types to your graph.
+_GRAPH_SCHEMA = """
+Node labels and properties:
+  (:Document  {user_id: string, file_name: string, job_id: string})
+  (:Entity    {user_id: string, name: string, type: string})
+    type is one of: PERSON, ORG, LOCATION, DATE, CONCEPT, PRODUCT, METRIC, TECHNOLOGY
+
+Relationships:
+  (:Entity)-[:APPEARS_IN {chunks: list}]->(:Document)
+  (:Entity)-[:RELATES_TO {type: string}]->(:Entity)
+    RELATES_TO.type examples: WORKS_FOR, LOCATED_IN, ACQUIRED, REPORTS_TO, FOUNDED_BY, PARTNERS_WITH
+
+All nodes are scoped per user — every query MUST filter by user_id.
+"""
+
+_CYPHER_SYSTEM_PROMPT = f"""You are a Cypher query generator for a Neo4j knowledge graph.
+
+Graph schema:
+{_GRAPH_SCHEMA}
+
+Rules you MUST follow — no exceptions:
+1. ALWAYS include a user_id filter: {{user_id: $user_id}} on every node pattern
+2. ALWAYS end with LIMIT $limit
+3. Use only labels and relationship types defined in the schema above
+4. Return only the raw Cypher query — no explanation, no markdown fences, no comments
+5. If the question cannot be answered with the schema, return exactly: UNSUPPORTED
+
+Good example:
+  Question: "Who are all people connected to Acme Corp?"
+  Cypher:
+  MATCH (p:Entity {{user_id: $user_id, type: "PERSON"}})-[:RELATES_TO]-(o:Entity {{user_id: $user_id, name: "Acme Corp"}})
+  RETURN p.name AS person, o.name AS org
+  LIMIT $limit
+
+Bad example (NEVER do this — missing user_id):
+  MATCH (e:Entity) WHERE e.name = "Acme Corp" RETURN e
+"""
+
+
+class Text2CypherInput(BaseModel):
+    run_id:   str = Field(description="The current run ID for context sharing")
+    question: str = Field(description="Natural language question to convert to a Cypher query")
+    limit:    int = Field(default=20, description="Max rows to return from Neo4j (1-50)")
+
+
+@function_tool
+async def text2cypher_tool(input: Text2CypherInput) -> str:
+    """
+    Converts a natural language question into a Cypher query and runs it against Neo4j Aura.
+
+    Use this for COMPLEX graph traversals that graph_search_tool cannot handle, such as:
+    - Multi-hop relationship questions: "who are all people connected to Acme Corp within 2 hops?"
+    - Aggregation questions: "which entity appears in the most documents?"
+    - Path questions: "what is the relationship chain between John and Manila?"
+    - Filtered traversals: "find all ORG entities that appear in more than one document"
+
+    Do NOT use for simple entity lookups — use graph_search_tool for those.
+    Always call context_builder_tool after this to fuse results with vector chunks.
+    """
+    from utils.neo4j_client import get_neo4j
+
+    ctx     = _run_context.get(input.run_id, {})
+    user_id = ctx.get("user_id")
+
+    if not user_id:
+        return "Error: No user_id in context."
+
+    limit = max(1, min(50, input.limit))
+
+    _banner("NEO4J AURA HIT -- text2cypher_tool")
+    _info(f"user_id  : {user_id}")
+    _info(f"question : {input.question}")
+
+    # ── Step 1: LLM generates the Cypher ─────────────────────────────────────
+    response = await _openai.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": _CYPHER_SYSTEM_PROMPT},
+            {"role": "user",   "content": input.question},
+        ],
+        temperature=0.0,
+        max_tokens=400,
+    )
+    raw_cypher = response.choices[0].message.content.strip()
+
+    # Strip markdown fences if model adds them despite instructions
+    if raw_cypher.startswith("```"):
+        raw_cypher = "\n".join(
+            line for line in raw_cypher.splitlines()
+            if not line.startswith("```")
+        ).strip()
+
+    _info(f"generated Cypher:\n{raw_cypher}")
+
+    if raw_cypher.upper() == "UNSUPPORTED":
+        _warn("LLM flagged question as unsupported by the schema")
+        _end()
+        return (
+            "This question cannot be answered by a graph traversal with the current schema. "
+            "Try graph_search_tool or search_chunks_tool instead."
+        )
+
+    # ── Step 2: Safety check — block queries missing user_id filter ───────────
+    # This is the critical multi-tenant guard. If the LLM forgot to include
+    # $user_id in the generated Cypher, we refuse to run it.
+    if "$user_id" not in raw_cypher:
+        _warn("SAFETY BLOCK — generated Cypher missing $user_id filter, refusing to run")
+        _end()
+        return (
+            "Generated Cypher was missing the required user_id filter and was blocked for safety. "
+            "Try rephrasing your question or use graph_search_tool instead."
+        )
+
+    # ── Step 3: Execute against Neo4j Aura ───────────────────────────────────
+    try:
+        driver = get_neo4j()
+        async with driver.session() as session:
+            result = await session.run(
+                raw_cypher,
+                user_id=user_id,   # always injected — never trust LLM to embed it
+                limit=limit,
+            )
+            rows = await result.data()
+
+    except Exception as e:
+        _warn(f"Cypher execution failed: {e}")
+        _end()
+        return (
+            f"The generated Cypher query failed to execute: {e}\n"
+            "Try rephrasing your question or use graph_search_tool instead."
+        )
+
+    if not rows:
+        _warn("Neo4j returned 0 rows")
+        _end()
+        return (
+            "The graph query returned no results. "
+            "The entities or relationships in your question may not exist in the graph yet."
+        )
+
+    _ok(f"Neo4j returned {len(rows)} row(s):")
+    for row in rows[:5]:
+        _info(f"  {row}")
+    if len(rows) > 5:
+        _info(f"  ... and {len(rows) - 5} more")
+    _end()
+
+    # Store graph results so context_builder_tool can include them
+    ctx["graph_results"] = ctx.get("graph_results", []) + [
+        {"file_name": "[graph query]", "matched_entities": list(row.values()), "related_entities": []}
+        for row in rows[:8]
+    ]
+    _run_context[input.run_id] = ctx
+
+    # Format rows as readable table
+    if not rows:
+        return "No results."
+
+    headers = list(rows[0].keys())
+    lines   = [" | ".join(headers)]
+    lines.append("-" * len(lines[0]))
+    for row in rows:
+        lines.append(" | ".join(str(row.get(h, "")) for h in headers))
+
+    return f"Graph query results ({len(rows)} rows):\n" + "\n".join(lines)

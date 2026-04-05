@@ -21,6 +21,8 @@ pdfplumber
 
 
 
+# Neo4j Aura
+neo4j==5.20.0          # async driver — AsyncGraphDatabase
 
 # tiktoken removed — no pre-built wheels for Python 3.14 on Render
 # using character-based token estimation instead (4 chars ≈ 1 token)
