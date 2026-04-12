@@ -4,13 +4,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from openai import AsyncOpenAI
 from utils.supabase_client import get_supabase
 from services.embedder import embed_single
-from config import OPENAI_API_KEY, OPENAI_EMBEDDING_MODEL
+from config import (
+    OPENAI_API_KEY, OPENAI_EMBEDDING_MODEL,
+    CHAT_TEMPERATURE, CHAT_MAX_TOKENS,
+    SEARCH_TOP_K, SEARCH_SIMILARITY_THRESHOLD,
+)
 
 _client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 # How many chunks to retrieve for context
-TOP_K = 5
-SIMILARITY_THRESHOLD = 0.70
+TOP_K = SEARCH_TOP_K
+SIMILARITY_THRESHOLD = SEARCH_SIMILARITY_THRESHOLD
 
 
 async def chat_with_docs(
@@ -54,8 +58,8 @@ async def chat_with_docs(
     response = await _client.chat.completions.create(
         model="gpt-4o-mini",
         messages=messages,
-        temperature=0.3,      # lower = more factual, less creative
-        max_tokens=1024,
+        temperature=CHAT_TEMPERATURE,
+        max_tokens=CHAT_MAX_TOKENS,
     )
 
     answer = response.choices[0].message.content

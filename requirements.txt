@@ -16,15 +16,21 @@ openai==2.26.0
 mammoth==1.7.1          # docx
 openpyxl==3.1.4         # xlsx - use read_only mode
 docling          # Document parsing and processing utilities
+pymupdf
+pdfplumber
 
 
+
+# Neo4j Aura
+neo4j==5.20.0          # async driver — AsyncGraphDatabase
 
 # tiktoken removed — no pre-built wheels for Python 3.14 on Render
 # using character-based token estimation instead (4 chars ≈ 1 token)
 
  
 # Utilities
-# hashlib is built into Python stdlib — no install needed
 tenacity==8.3.0         # retry logic for API calls
 PyJWT>=2.10.1           # JWT verification for chat endpoint
 openai-agents==0.12.4   # OpenAI Agents SDK for agentic RAG
+
+

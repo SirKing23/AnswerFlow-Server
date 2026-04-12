@@ -1,4 +1,5 @@
 import io
+import json
 import httpx
 from config import UNSTRUCTURED_API_KEY, UNSTRUCTURED_API_URL
 
@@ -50,36 +51,82 @@ async def parse_with_unstructured(file_bytes: bytes, file_name: str, mime_type: 
             f"Unstructured.io failed on all strategies. Last error: {last_error}"
         )
 
-    elements = response.json()
+    raw_elements = response.json()
 
-    if not elements:
+    if not raw_elements:
         raise ValueError("Unstructured.io returned no elements — file may be empty or unreadable")
 
-    return _elements_to_text(elements)
+    return _elements_to_structured_json(raw_elements, file_name)
 
 
-def _elements_to_text(elements: list[dict]) -> str:
+def _elements_to_structured_json(raw_elements: list[dict], file_name: str) -> str:
+    """
+    Convert Unstructured API elements into the structured JSON format
+    expected by docling_chunker.chunk_elements(), preserving page numbers.
+
+    Returns a JSON string with {"filename", "elements"} matching the
+    docling_parser / PyMuPDF output format.
+    """
     skip_types = {"Footer", "Header", "PageBreak"}
-    section_types = {"Title", "Header"}
+    heading_types = {"Title"}
 
-    lines = []
+    elements = []
+    seen_pages = set()
 
-    for el in elements:
+    for el in raw_elements:
         el_type = el.get("type", "")
         text = el.get("text", "").strip()
+        metadata = el.get("metadata", {})
+        page = metadata.get("page_number")
+
+        if page is not None:
+            seen_pages.add(page)
 
         if not text or el_type in skip_types:
             continue
 
-        if el_type in section_types:
-            lines.append(f"\n## {text}")
-        elif el_type == "Table":
-            lines.append(f"\n[TABLE]\n{text}\n[/TABLE]")
-        elif el_type == "ListItem":
-            lines.append(f"• {text}")
-        elif el_type == "PageBreak":
-            lines.append("\n")
-        else:
-            lines.append(text)
+        if el_type in heading_types:
+            elements.append({
+                "type":  "heading",
+                "level": 2,
+                "text":  text,
+                "page":  page,
+            })
 
-    return "\n".join(lines).strip()
+        elif el_type == "Table":
+            elements.append({
+                "type":     "table",
+                "markdown": text,
+                "text":     text,
+                "page":     page,
+            })
+
+        elif el_type == "ListItem":
+            elements.append({
+                "type": "text",
+                "text": f"• {text}",
+                "page": page,
+            })
+
+        elif el_type == "Image":
+            elements.append({
+                "type": "picture",
+                "annotations": [text] if text else [],
+                "page": page,
+            })
+
+        else:
+            # NarrativeText, UncategorizedText, etc.
+            elements.append({
+                "type": "text",
+                "text": text,
+                "page": page,
+            })
+
+    num_pages = max(seen_pages) if seen_pages else None
+
+    return json.dumps({
+        "filename":  file_name,
+        "num_pages": num_pages,
+        "elements":  elements,
+    }, ensure_ascii=False)

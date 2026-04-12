@@ -10,12 +10,22 @@ services:
         sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
       - key: OPENAI_API_KEY
         sync: false
       - key: UNSTRUCTURED_API_KEY
         sync: false
       - key: WEBHOOK_SECRET
         sync: false
+      # Neo4j Aura — get these from your Aura console after creating an instance
+      - key: NEO4J_URI
+        sync: false   # neo4j+s://<instance-id>.databases.neo4j.io
+      - key: NEO4J_USER
+        value: neo4j
+      - key: NEO4J_PASSWORD
+        sync: false
+      # Optional tuning
       - key: OPENAI_EMBEDDING_MODEL
         value: text-embedding-3-small
       - key: CHUNK_SIZE_TOKENS
