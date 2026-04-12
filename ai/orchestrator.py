@@ -20,7 +20,12 @@ from ai.tools import (
     clear_run_context,
 )
 
-from config import OPENAI_API_KEY, OPENAI_CHAT_MODEL
+from config import (
+    OPENAI_API_KEY, OPENAI_CHAT_MODEL,
+    ORCHESTRATOR_TEMPERATURE, ORCHESTRATOR_PRESENCE_PENALTY,
+    ORCHESTRATOR_MAX_TOKENS, ORCHESTRATOR_MAX_TURNS,
+    CHAT_HISTORY_WINDOW,
+)
 import os as _os
 _os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 
@@ -120,9 +125,9 @@ async def run_agent(
         model=OPENAI_CHAT_MODEL,
         model_settings=ModelSettings(
             parallel_tool_calls=False,
-            temperature=0.7,
-            presence_penalty=0.3,
-            max_tokens=2048,
+            temperature=ORCHESTRATOR_TEMPERATURE,
+            presence_penalty=ORCHESTRATOR_PRESENCE_PENALTY,
+            max_tokens=ORCHESTRATOR_MAX_TOKENS,
         ),
         tools=[
             query_decomposer_tool,
@@ -140,7 +145,7 @@ async def run_agent(
     if history:
         history_text = "\n".join([
             f"{m['role'].upper()}: {m['content']}"
-            for m in history[-6:]
+            for m in history[-CHAT_HISTORY_WINDOW:]
         ])
         history_text = f"\n\nConversation history:\n{history_text}"
 
@@ -153,7 +158,7 @@ async def run_agent(
     )
 
     try:
-        result = await Runner.run(agent, agent_input, max_turns=25)
+        result = await Runner.run(agent, agent_input, max_turns=ORCHESTRATOR_MAX_TURNS)
         ctx     = get_run_context(run_id)
         return {
             "answer":  result.final_output,

@@ -37,12 +37,9 @@ from services.entity_extractor import extract_entities_and_relations
 from chunker import chunk_text
 from docling_chunker import chunk_markdown
 from embedder import embed_chunks
+from config import GRAPH_CONCURRENCY
 
 log = logging.getLogger(__name__)
-
-# How many chunks to process for graph extraction concurrently
-# Keep low to avoid hitting OpenAI rate limits during heavy ingestion
-GRAPH_CONCURRENCY = 3
 
 
 async def process_file_pipeline(
@@ -140,6 +137,7 @@ async def process_file_pipeline(
             }
             for chunk in embedded_chunks
         ]
+        
         await store_embeddings(rows)
 
         # ── 8. Build knowledge graph → Neo4j Aura ────────────────────────────
@@ -198,7 +196,11 @@ async def _build_knowledge_graph(
         nonlocal errors
         async with semaphore:
             try:
-                graph_data = await extract_entities_and_relations(chunk["content"])
+                graph_data = await extract_entities_and_relations(
+                                chunk_text=chunk["content"],
+                                file_name=file_name,
+                                metadata=chunk.get("metadata", {}),
+                            )
 
                 if graph_data["entities"] or graph_data["relations"]:
                     await store_graph_data(

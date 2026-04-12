@@ -7,7 +7,18 @@ from typing import Optional
 from services.embedder import embed_single
 from utils.supabase_client import get_supabase
 from openai import AsyncOpenAI
-from config import OPENAI_API_KEY
+from config import (
+    OPENAI_API_KEY,
+    DECOMPOSER_TEMPERATURE, DECOMPOSER_MAX_TOKENS,
+    CONTEXT_BUILDER_TEMPERATURE, CONTEXT_BUILDER_MAX_TOKENS,
+    VALIDATOR_TEMPERATURE, VALIDATOR_MAX_TOKENS,
+    QUERY_NER_TEMPERATURE, QUERY_NER_MAX_TOKENS,
+    TEXT2CYPHER_TEMPERATURE, TEXT2CYPHER_MAX_TOKENS,
+    SEARCH_TOP_K, SEARCH_SIMILARITY_THRESHOLD,
+    GRAPH_SEARCH_LIMIT, ENTITY_EXPLORER_LIMIT,
+    TEXT2CYPHER_DEFAULT_LIMIT, TEXT2CYPHER_MAX_LIMIT,
+    CHAT_HISTORY_WINDOW,
+)
 
 _openai = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
@@ -76,8 +87,8 @@ async def user_query_embedder_tool(input: EmbedInput) -> str:
 
 class SearchInput(BaseModel):
     run_id:               str   = Field(description="The current run ID for context sharing")
-    similarity_threshold: float = Field(default=0.30, description="Minimum similarity score 0-1")
-    match_count:          int   = Field(default=5,    description="Number of chunks to retrieve")
+    similarity_threshold: float = Field(default=SEARCH_SIMILARITY_THRESHOLD, description="Minimum similarity score 0-1")
+    match_count:          int   = Field(default=SEARCH_TOP_K,    description="Number of chunks to retrieve")
 
 
 @function_tool
@@ -173,8 +184,8 @@ async def query_decomposer_tool(input: DecomposeInput) -> str:
             },
             {"role": "user", "content": input.query}
         ],
-        temperature=0.1,
-        max_tokens=300,
+        temperature=DECOMPOSER_TEMPERATURE,
+        max_tokens=DECOMPOSER_MAX_TOKENS,
     )
     result = response.choices[0].message.content.strip()
     ctx = _run_context.get(input.run_id, {})
@@ -241,7 +252,7 @@ async def context_builder_tool(input: ContextBuilderInput) -> str:
         graph_section = "\n".join(lines)
 
     history_text = "\n".join([
-        f"{m.role.upper()}: {m.content}" for m in input.chat_history[-6:]
+        f"{m.role.upper()}: {m.content}" for m in input.chat_history[-CHAT_HISTORY_WINDOW:]
     ]) if input.chat_history else "None"
 
     combined = f"{chunk_section}\n\n{graph_section}".strip()
@@ -270,8 +281,8 @@ async def context_builder_tool(input: ContextBuilderInput) -> str:
                 )
             }
         ],
-        temperature=0.1,
-        max_tokens=1500,
+        temperature=CONTEXT_BUILDER_TEMPERATURE,
+        max_tokens=CONTEXT_BUILDER_MAX_TOKENS,
     )
 
     enriched = response.choices[0].message.content.strip()
@@ -328,8 +339,8 @@ async def answer_validator_tool(input: ValidatorInput) -> str:
                 "content": f"Context:\n{context}\n\nAnswer:\n{input.answer}"
             }
         ],
-        temperature=0.0,
-        max_tokens=400,
+        temperature=VALIDATOR_TEMPERATURE,
+        max_tokens=VALIDATOR_MAX_TOKENS,
     )
     result = response.choices[0].message.content.strip()
     verdict = "VALID" if result.strip() == "VALID" else "ISSUES FOUND"
@@ -362,8 +373,8 @@ async def _extract_query_entities(text: str) -> list[str]:
             },
             {"role": "user", "content": text[:500]},
         ],
-        temperature=0.0,
-        max_tokens=150,
+        temperature=QUERY_NER_TEMPERATURE,
+        max_tokens=QUERY_NER_MAX_TOKENS,
         response_format={"type": "json_object"},
     )
     try:
@@ -415,7 +426,7 @@ async def graph_search_tool(input: GraphSearchInput) -> str:
         user_id=user_id,
         entity_names=entity_names,
         max_hops=input.max_hops,
-        limit=8,
+        limit=GRAPH_SEARCH_LIMIT,
     )
 
     if not results:
@@ -485,7 +496,7 @@ async def entity_explorer_tool(input: EntityExploreInput) -> str:
     neighbors = await get_entity_neighbors(
         user_id=user_id,
         entity_name=input.entity_name,
-        limit=15,
+        limit=ENTITY_EXPLORER_LIMIT,
     )
 
     if not neighbors:
@@ -516,12 +527,22 @@ _GRAPH_SCHEMA = """
 Node labels and properties:
   (:Document  {user_id: string, file_name: string, job_id: string})
   (:Entity    {user_id: string, name: string, type: string})
-    type is one of: PERSON, ORG, LOCATION, DATE, CONCEPT, PRODUCT, METRIC, TECHNOLOGY
+    type is one of: STUDENT, TEACHER, SCHOOL_HEAD, OFFICIAL,
+                    SCHOOL, DISTRICT, DIVISION, REGION,
+                    SUBJECT, GRADE_LEVEL, COMPETENCY, PROGRAM,
+                    POLICY, PROVISION,
+                    ASSESSMENT, METRIC,
+                    PERIOD,
+                    CONCEPT, CHARACTER, SETTING
 
 Relationships:
   (:Entity)-[:APPEARS_IN {chunks: list}]->(:Document)
   (:Entity)-[:RELATES_TO {type: string}]->(:Entity)
-    RELATES_TO.type examples: WORKS_FOR, LOCATED_IN, ACQUIRED, REPORTS_TO, FOUNDED_BY, PARTNERS_WITH
+    RELATES_TO.type examples: ISSUED_BY, APPLIES_TO, IMPLEMENTS, REFERENCES, SIGNED_BY,
+      COVERS, PRESCRIBED_FOR, ALIGNED_WITH, USES_APPROACH, TAUGHT_IN,
+      SCORED_ON, ENROLLED_IN, TEACHES, ASSESSED_IN, BELONGS_TO, ACHIEVED,
+      IMPLEMENTED_BY, CONDUCTED_AT, SUPERVISED_BY, PARTICIPATED_IN,
+      TEACHES_CONCEPT, SUITABLE_FOR, FEATURES
 
 All nodes are scoped per user — every query MUST filter by user_id.
 """
@@ -539,21 +560,21 @@ Rules you MUST follow — no exceptions:
 5. If the question cannot be answered with the schema, return exactly: UNSUPPORTED
 
 Good example:
-  Question: "Who are all people connected to Acme Corp?"
+  Question: "Which teachers are connected to Olongapo City National High School?"
   Cypher:
-  MATCH (p:Entity {{user_id: $user_id, type: "PERSON"}})-[:RELATES_TO]-(o:Entity {{user_id: $user_id, name: "Acme Corp"}})
-  RETURN p.name AS person, o.name AS org
+  MATCH (t:Entity {{user_id: $user_id, type: "TEACHER"}})-[:RELATES_TO]-(s:Entity {{user_id: $user_id, name: "Olongapo City National High School"}})
+  RETURN t.name AS teacher, s.name AS school
   LIMIT $limit
 
 Bad example (NEVER do this — missing user_id):
-  MATCH (e:Entity) WHERE e.name = "Acme Corp" RETURN e
+  MATCH (e:Entity) WHERE e.name = "Olongapo City National High School" RETURN e
 """
 
 
 class Text2CypherInput(BaseModel):
     run_id:   str = Field(description="The current run ID for context sharing")
     question: str = Field(description="Natural language question to convert to a Cypher query")
-    limit:    int = Field(default=20, description="Max rows to return from Neo4j (1-50)")
+    limit:    int = Field(default=TEXT2CYPHER_DEFAULT_LIMIT, description="Max rows to return from Neo4j")
 
 
 @function_tool
@@ -562,10 +583,10 @@ async def text2cypher_tool(input: Text2CypherInput) -> str:
     Converts a natural language question into a Cypher query and runs it against Neo4j Aura.
 
     Use this for COMPLEX graph traversals that graph_search_tool cannot handle, such as:
-    - Multi-hop relationship questions: "who are all people connected to Acme Corp within 2 hops?"
+    - Multi-hop relationship questions: "which policies apply to Grade 4 within 2 hops?"
     - Aggregation questions: "which entity appears in the most documents?"
-    - Path questions: "what is the relationship chain between John and Manila?"
-    - Filtered traversals: "find all ORG entities that appear in more than one document"
+    - Path questions: "what is the relationship chain between a teacher and a school?"
+    - Filtered traversals: "find all SCHOOL entities that appear in more than one document"
 
     Do NOT use for simple entity lookups — use graph_search_tool for those.
     Always call context_builder_tool after this to fuse results with vector chunks.
@@ -578,7 +599,7 @@ async def text2cypher_tool(input: Text2CypherInput) -> str:
     if not user_id:
         return "Error: No user_id in context."
 
-    limit = max(1, min(50, input.limit))
+    limit = max(1, min(TEXT2CYPHER_MAX_LIMIT, input.limit))
 
     _banner("NEO4J AURA HIT -- text2cypher_tool")
     _info(f"user_id  : {user_id}")
@@ -591,8 +612,8 @@ async def text2cypher_tool(input: Text2CypherInput) -> str:
             {"role": "system", "content": _CYPHER_SYSTEM_PROMPT},
             {"role": "user",   "content": input.question},
         ],
-        temperature=0.0,
-        max_tokens=400,
+        temperature=TEXT2CYPHER_TEMPERATURE,
+        max_tokens=TEXT2CYPHER_MAX_TOKENS,
     )
     raw_cypher = response.choices[0].message.content.strip()
 
