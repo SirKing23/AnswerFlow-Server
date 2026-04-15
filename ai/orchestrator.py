@@ -5,10 +5,9 @@ import uuid
 from typing import Optional
 from agents import Agent, Runner, ModelSettings
 
-# All 8 tools live in tools.py
+# All 7 tools live in tools.py
 from ai.tools import (
-    user_query_embedder_tool,
-    search_chunks_tool,
+    vector_search_tool,
     query_decomposer_tool,
     context_builder_tool,
     answer_validator_tool,
@@ -42,24 +41,21 @@ You have access to TWO retrieval systems — use both when appropriate:
 1. query_decomposer_tool
    Use ONLY when the question is complex or multi-part. Skip for simple questions.
 
-2. user_query_embedder_tool
-   Always call before search_chunks_tool to create the vector embedding.
+2. vector_search_tool
+   Embeds the query and searches the user's documents in one step.
+   Use for any content-level question. Can run IN PARALLEL with graph_search_tool.
 
-3. search_chunks_tool
-   Semantic similarity search across the user's documents.
-   Call after embedding. Use for any content-level question.
-
-4. graph_search_tool
+3. graph_search_tool
    Searches Neo4j for documents containing specific named entities.
    Call when the question mentions a specific person, company, place, product, or concept.
    Call when asking about relationships between things.
    Call when vector search returns weak results on entity-heavy questions.
 
-5. entity_explorer_tool
+4. entity_explorer_tool
    Explores all direct connections of a named entity in the knowledge graph.
    Call after graph_search_tool when you want to dig deeper into one entity's neighborhood.
 
-6. text2cypher_tool
+5. text2cypher_tool
    Converts a natural language question into a Cypher query and runs it on Neo4j.
    Use for COMPLEX graph traversals that graph_search_tool cannot handle:
      - Multi-hop: "who are all people connected to Acme Corp within 2 hops?"
@@ -68,21 +64,21 @@ You have access to TWO retrieval systems — use both when appropriate:
      - Filtered: "find all ORG entities appearing in more than one document"
    Do NOT use for simple entity lookups — use graph_search_tool for those.
 
-7. context_builder_tool
+6. context_builder_tool
    ALWAYS call after ALL searches are complete (vector + graph).
    Fuses all result types into a coherent context for answering.
 
-8. answer_validator_tool
+7. answer_validator_tool
    ALWAYS call before your final answer. Catches hallucinations.
    Revise and re-validate if it returns UNSUPPORTED claims.
 
 ━━━ DECISION GUIDE ━━━
 
 Simple factual question:
-  → embed → search_chunks_tool → context_builder_tool → validate → answer
+  → vector_search_tool → context_builder_tool → validate → answer
 
 Entity question ("docs about Acme Corp", "what did John say about X"):
-  → graph_search_tool + embed + search_chunks_tool → context_builder_tool → validate → answer
+  → vector_search_tool + graph_search_tool (parallel) → context_builder_tool → validate → answer
 
 Relationship question ("how does X relate to Y", "what connects A and B"):
   → graph_search_tool → entity_explorer_tool → context_builder_tool → validate → answer
@@ -124,15 +120,14 @@ async def run_agent(
         instructions=ORCHESTRATOR_INSTRUCTIONS,
         model=OPENAI_CHAT_MODEL,
         model_settings=ModelSettings(
-            parallel_tool_calls=False,
+            parallel_tool_calls=True,
             temperature=ORCHESTRATOR_TEMPERATURE,
             presence_penalty=ORCHESTRATOR_PRESENCE_PENALTY,
             max_tokens=ORCHESTRATOR_MAX_TOKENS,
         ),
         tools=[
             query_decomposer_tool,
-            user_query_embedder_tool,
-            search_chunks_tool,
+            vector_search_tool,       # embed + pgvector search in one step
             graph_search_tool,        # Neo4j entity search
             entity_explorer_tool,     # Neo4j neighborhood exploration
             text2cypher_tool,         # Neo4j natural language Cypher

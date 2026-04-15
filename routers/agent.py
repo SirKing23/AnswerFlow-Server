@@ -39,8 +39,7 @@ async def agent_chat(request: Request, body: AgentRequest):
 
     Tool flow (agent decides):
       query_decomposer_tool  → breaks complex questions apart
-      user_query_embedder_tool → embeds the query
-      search_chunks_tool       → retrieves relevant chunks
+      vector_search_tool       → embeds query + retrieves relevant chunks
       context_builder_tool     → enriches and filters context
       answer_validator_tool    → checks answer is grounded
       text2cypher_tool           → converts simple queries to Cypher for direct graph retrieval
@@ -58,7 +57,7 @@ async def agent_chat(request: Request, body: AgentRequest):
         message=body.message,
         history=history,
         file_id=body.file_id,
-        run_id=body.run_id,
+        run_id=body.run_id
     )
 
     if result["error"]:
