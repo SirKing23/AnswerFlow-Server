@@ -43,7 +43,7 @@ STORAGE_BUCKET            = os.getenv("STORAGE_BUCKET", "user-files")
 ORCHESTRATOR_TEMPERATURE      = float(os.getenv("ORCHESTRATOR_TEMPERATURE", 0.7))
 ORCHESTRATOR_PRESENCE_PENALTY = float(os.getenv("ORCHESTRATOR_PRESENCE_PENALTY", 0.3))
 ORCHESTRATOR_MAX_TOKENS       = int(os.getenv("ORCHESTRATOR_MAX_TOKENS", 2048))
-ORCHESTRATOR_MAX_TURNS        = int(os.getenv("ORCHESTRATOR_MAX_TURNS", 25))
+ORCHESTRATOR_MAX_TURNS        = int(os.getenv("ORCHESTRATOR_MAX_TURNS", 10))
 
 # Query decomposer (ai/tools.py → query_decomposer_tool)
 DECOMPOSER_TEMPERATURE = float(os.getenv("DECOMPOSER_TEMPERATURE", 0.1))

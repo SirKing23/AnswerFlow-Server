@@ -169,10 +169,12 @@ async def store_graph_data(
     relations: list[dict],   # [{"source": "Acme Corp", "target": "Manila", "type": "LOCATED_IN"}, ...]
 ) -> None:
     """
-    Upsert Document → Entity nodes and APPEARS_IN / RELATES_TO edges.
+    Upsert Document → Entity nodes and APPEARS_IN edges, plus native
+    relationship-type edges between entities (e.g. ISSUED_BY, COVERS).
 
     All nodes are scoped to user_id so users never see each other's data.
     Uses MERGE so re-processing the same file is safe (idempotent).
+    Relationship types are created dynamically via apoc.merge.relationship().
     """
     if not entities and not relations:
         return
@@ -210,7 +212,9 @@ async def store_graph_data(
             """, user_id=user_id, name=name, etype=etype,
                  file_name=file_name, chunk_ref=chunk_ref)
 
-        # 3. Upsert RELATES_TO edges between entity pairs
+        # 3. Upsert native relationship edges between entity pairs
+        #    Uses apoc.merge.relationship() so each relation type
+        #    (ISSUED_BY, COVERS, etc.) becomes its own Neo4j edge type.
         for rel in relations:
             source = (rel.get("source") or "").strip()
             target = (rel.get("target") or "").strip()
@@ -221,9 +225,8 @@ async def store_graph_data(
             await session.run("""
                 MATCH (a:Entity {user_id: $user_id, name: $source})
                 MATCH (b:Entity {user_id: $user_id, name: $target})
-                MERGE (a)-[r:RELATES_TO {type: $rel_type}]->(b)
-                SET r.updated_at = timestamp(),
-                    r.chunk_ref  = $chunk_ref
+                CALL apoc.merge.relationship(a, $rel_type, {}, {updated_at: timestamp(), chunk_ref: $chunk_ref}, b) YIELD rel
+                RETURN rel
             """, user_id=user_id, source=source, target=target,
                  rel_type=rel_type, chunk_ref=chunk_ref)
 
@@ -240,8 +243,8 @@ async def graph_search(
     """
     Find documents and related entities connected to the queried entity names.
 
-    Two-hop traversal:
-      (query_entity) -[:RELATES_TO*1..max_hops]-> (neighbor) -[:APPEARS_IN]-> (doc)
+    Two-hop traversal using any relationship type except APPEARS_IN:
+      (query_entity) -[*1..max_hops]-> (neighbor) -[:APPEARS_IN]-> (doc)
 
     Returns list of:
       {
@@ -262,7 +265,8 @@ async def graph_search(
             WHERE e.name IN $names
             MATCH (e)-[:APPEARS_IN]->(d:Document {user_id: $user_id})
 
-            OPTIONAL MATCH (e)-[:RELATES_TO*1..2]-(neighbor:Entity {user_id: $user_id})
+            OPTIONAL MATCH path = (e)-[*1..2]-(neighbor:Entity {user_id: $user_id})
+            WHERE NONE(r IN relationships(path) WHERE type(r) = 'APPEARS_IN')
             OPTIONAL MATCH (neighbor)-[:APPEARS_IN]->(d2:Document {user_id: $user_id})
 
             WITH d,
@@ -296,8 +300,9 @@ async def get_entity_neighbors(
     async with driver.session() as session:
         result = await session.run("""
             MATCH (a:Entity {user_id: $user_id, name: $name})
-            MATCH (a)-[r:RELATES_TO]-(b:Entity {user_id: $user_id})
-            RETURN b.name AS neighbor, b.type AS type, r.type AS relation
+            MATCH (a)-[r]-(b:Entity {user_id: $user_id})
+            WHERE type(r) <> 'APPEARS_IN'
+            RETURN b.name AS neighbor, b.type AS type, type(r) AS relation
             LIMIT $limit
         """, user_id=user_id, name=entity_name, limit=limit)
         return await result.data()
@@ -322,10 +327,12 @@ async def delete_graph_for_file(user_id: str, file_name: str) -> int:
         summary = await result.consume()
 
         # Clean up orphan entities (no remaining APPEARS_IN edges)
+        # DETACH DELETE removes the entity AND any entity-to-entity edges
+        # (e.g. ISSUED_BY, COVERS) still attached to the orphan.
         orphan_result = await session.run("""
             MATCH (e:Entity {user_id: $user_id})
             WHERE NOT (e)-[:APPEARS_IN]->()
-            DELETE e
+            DETACH DELETE e
             RETURN count(e) AS deleted
         """, user_id=user_id)
         orphan_data = await orphan_result.data()

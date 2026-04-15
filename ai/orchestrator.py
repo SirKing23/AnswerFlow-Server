@@ -95,6 +95,15 @@ Complex multi-part question:
 - If no search returns results, say so clearly — do not make up an answer.
 - Be concise and direct. Use bullet points for lists.
 - The run_id is provided in the first user message — pass it to every tool call.
+
+━━━ ANTI-LOOP RULES (CRITICAL) ━━━
+- Call vector_search_tool AT MOST ONCE per user question (or per sub-query if decomposed).
+- Call graph_search_tool AT MOST ONCE per user question (or per sub-query if decomposed).
+- NEVER re-call a search tool with a rephrased version of the same question.
+- If a search returns no results, ACCEPT IT and move on — do not retry.
+- After all searches are done, call context_builder_tool ONCE, then answer_validator_tool ONCE.
+- Your total workflow for a simple question must be: search → build → validate → answer. That's it.
+- If both vector and graph search return nothing, answer: "I could not find relevant information in your documents."
 """
 
 

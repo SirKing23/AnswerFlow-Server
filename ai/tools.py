@@ -346,11 +346,21 @@ async def _extract_query_entities(text: str) -> list[str]:
             {
                 "role": "system",
                 "content": (
-                    "Extract named entities (people, companies, places, products, concepts) "
-                    "from the user's question. Return ONLY a JSON object with key entities "
-                    "containing an array of name strings. "
-                    "Example: {\"entities\": [\"Acme Corp\", \"Manila\"]}. "
-                    "Return {\"entities\": []} if no clear named entities exist."
+                    "Extract named entities from the user's question for a Philippine education "
+                    "(DepEd) knowledge graph. Return ONLY a JSON object with key 'entities' "
+                    "containing an array of name strings.\n\n"
+                    "Entity types to look for:\n"
+                    "- People: teacher names, officials, school heads\n"
+                    "- Positions/Ranks: Teacher I, Teacher II, Teacher III, Master Teacher, Head Teacher\n"
+                    "- Institutions: school names, DepEd, divisions, districts, regions\n"
+                    "- Policies: DepEd Orders (DO), DepEd Memos (DM), Republic Acts (RA), "
+                    "  e.g. 'DO 020 s.2024', 'RA 4670'\n"
+                    "- Curriculum: subject names, grade levels (Grade 7, SHS), MELCs, programs (K-12, ALS)\n"
+                    "- Assessments: NAT, PISA, quarterly exams\n"
+                    "- Concepts/Topics: promotion, reclassification, ranking, equivalents\n\n"
+                    "Be generous — extract concepts and domain terms, not just proper nouns.\n"
+                    "Example: {\"entities\": [\"Teacher I\", \"Teacher II\", \"promotion\", \"DepEd\"]}\n"
+                    "Return {\"entities\": []} ONLY if the question is completely generic."
                 )
             },
             {"role": "user", "content": text[:500]},
@@ -519,12 +529,20 @@ Node labels and properties:
 
 Relationships:
   (:Entity)-[:APPEARS_IN {chunks: list}]->(:Document)
-  (:Entity)-[:RELATES_TO {type: string}]->(:Entity)
-    RELATES_TO.type examples: ISSUED_BY, APPLIES_TO, IMPLEMENTS, REFERENCES, SIGNED_BY,
-      COVERS, PRESCRIBED_FOR, ALIGNED_WITH, USES_APPROACH, TAUGHT_IN,
-      SCORED_ON, ENROLLED_IN, TEACHES, ASSESSED_IN, BELONGS_TO, ACHIEVED,
-      IMPLEMENTED_BY, CONDUCTED_AT, SUPERVISED_BY, PARTICIPATED_IN,
-      TEACHES_CONCEPT, SUITABLE_FOR, FEATURES
+
+  Entity-to-Entity relationships use NATIVE edge types (not a generic RELATES_TO).
+  Each relationship type is its own Neo4j edge label, for example:
+    (:Entity)-[:ISSUED_BY]->(:Entity)
+    (:Entity)-[:APPLIES_TO]->(:Entity)
+    (:Entity)-[:COVERS]->(:Entity)
+
+  Known relationship types (new types may appear as documents are processed):
+    Policy:      ISSUED_BY, SUPERSEDES, APPLIES_TO, IMPLEMENTS, REFERENCES, SIGNED_BY, EFFECTIVE_ON
+    Curriculum:  COVERS, PRESCRIBED_FOR, ALIGNED_WITH, USES_APPROACH, TAUGHT_IN
+    Performance: SCORED_ON, ENROLLED_IN, TEACHES, ASSESSED_IN, ACHIEVED
+    Report:      IMPLEMENTED_BY, CONDUCTED_AT, SUPERVISED_BY, PARTICIPATED_IN
+    Content:     TEACHES_CONCEPT, SUITABLE_FOR, FEATURES, BELONGS_TO
+    Fallback:    RELATED_TO (when no specific type was extracted)
 
 All nodes are scoped per user — every query MUST filter by user_id.
 """
@@ -537,15 +555,24 @@ Graph schema:
 Rules you MUST follow — no exceptions:
 1. ALWAYS include a user_id filter: {{user_id: $user_id}} on every node pattern
 2. ALWAYS end with LIMIT $limit
-3. Use only labels and relationship types defined in the schema above
-4. Return only the raw Cypher query — no explanation, no markdown fences, no comments
-5. If the question cannot be answered with the schema, return exactly: UNSUPPORTED
+3. Use the native relationship types listed in the schema (e.g. [:ISSUED_BY], [:COVERS])
+4. When the exact relationship type is unknown, use a generic pattern like -[r]- with WHERE type(r) <> 'APPEARS_IN'
+5. Return only the raw Cypher query — no explanation, no markdown fences, no comments
+6. If the question cannot be answered with the schema, return exactly: UNSUPPORTED
 
-Good example:
+Good example 1 — specific relationship:
+  Question: "Which policies were issued by DepEd?"
+  Cypher:
+  MATCH (p:Entity {{user_id: $user_id, type: "POLICY"}})-[:ISSUED_BY]->(o:Entity {{user_id: $user_id, name: "DepEd"}})
+  RETURN p.name AS policy, o.name AS issuer
+  LIMIT $limit
+
+Good example 2 — any relationship:
   Question: "Which teachers are connected to Olongapo City National High School?"
   Cypher:
-  MATCH (t:Entity {{user_id: $user_id, type: "TEACHER"}})-[:RELATES_TO]-(s:Entity {{user_id: $user_id, name: "Olongapo City National High School"}})
-  RETURN t.name AS teacher, s.name AS school
+  MATCH (t:Entity {{user_id: $user_id, type: "TEACHER"}})-[r]-(s:Entity {{user_id: $user_id, name: "Olongapo City National High School"}})
+  WHERE type(r) <> 'APPEARS_IN'
+  RETURN t.name AS teacher, type(r) AS relationship, s.name AS school
   LIMIT $limit
 
 Bad example (NEVER do this — missing user_id):
