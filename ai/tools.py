@@ -18,6 +18,13 @@ from config import (
     GRAPH_SEARCH_LIMIT, ENTITY_EXPLORER_LIMIT,
     TEXT2CYPHER_DEFAULT_LIMIT, TEXT2CYPHER_MAX_LIMIT,
     CHAT_HISTORY_WINDOW,
+    ENABLE_INTERNET_SEARCH, INTERNET_SEARCH_RESULTS, INTERNET_SEARCH_TIMEOUT,
+    # Prompts loaded from .env — edit there to tune without code changes
+    DECOMPOSER_SYSTEM_PROMPT,
+    CONTEXT_BUILDER_SYSTEM_PROMPT,
+    VALIDATOR_SYSTEM_PROMPT,
+    QUERY_NER_SYSTEM_PROMPT,
+    CYPHER_SYSTEM_PROMPT as _CYPHER_SYSTEM_PROMPT,
 )
 
 _openai = AsyncOpenAI(api_key=OPENAI_API_KEY)
@@ -157,12 +164,8 @@ async def query_decomposer_tool(input: DecomposeInput) -> str:
         messages=[
             {
                 "role": "system",
-                "content": (
-                    "You are a query analysis expert. Determine if the question needs "
-                    "breaking into sub-questions for better document retrieval. "
-                    "If simple, return as-is. If complex, break into 2-4 focused sub-questions. "
-                    "Return ONLY the question(s), numbered if multiple."
-                )
+                # Prompt: DECOMPOSER_SYSTEM_PROMPT — loaded from .env via config.py
+                "content": DECOMPOSER_SYSTEM_PROMPT,
             },
             {"role": "user", "content": input.query}
         ],
@@ -244,15 +247,8 @@ async def context_builder_tool(input: ContextBuilderInput) -> str:
         messages=[
             {
                 "role": "system",
-                "content": (
-                    "You are a context analyst. Given vector search chunks and knowledge "
-                    "graph findings, your job is to:\n"
-                    "1. Filter out content clearly irrelevant to the query\n"
-                    "2. Resolve pronouns or references using chat history\n"
-                    "3. Incorporate entity relationships from graph findings\n"
-                    "4. Organize everything logically for answering the question\n"
-                    "Keep all source labels intact. Do not add outside information."
-                )
+                # Prompt: CONTEXT_BUILDER_SYSTEM_PROMPT — loaded from .env via config.py
+                "content": CONTEXT_BUILDER_SYSTEM_PROMPT,
             },
             {
                 "role": "user",
@@ -310,11 +306,8 @@ async def answer_validator_tool(input: ValidatorInput) -> str:
         messages=[
             {
                 "role": "system",
-                "content": (
-                    "You are a fact-checking assistant. Check if every claim in the answer "
-                    "is supported by the context. Reply 'VALID' if fully grounded. "
-                    "Otherwise list each unsupported claim starting with '- UNSUPPORTED:'"
-                )
+                # Prompt: VALIDATOR_SYSTEM_PROMPT — loaded from .env via config.py
+                "content": VALIDATOR_SYSTEM_PROMPT,
             },
             {
                 "role": "user",
@@ -345,25 +338,11 @@ async def _extract_query_entities(text: str) -> list[str]:
         messages=[
             {
                 "role": "system",
-                "content": (
-                    "Extract named entities from the user's question for a Philippine education "
-                    "(DepEd) knowledge graph. Return ONLY a JSON object with key 'entities' "
-                    "containing an array of name strings.\n\n"
-                    "Entity types to look for:\n"
-                    "- People: teacher names, officials, school heads\n"
-                    "- Positions/Ranks: Teacher I, Teacher II, Teacher III, Master Teacher, Head Teacher\n"
-                    "- Institutions: school names, DepEd, divisions, districts, regions\n"
-                    "- Policies: DepEd Orders (DO), DepEd Memos (DM), Republic Acts (RA), "
-                    "  e.g. 'DO 020 s.2024', 'RA 4670'\n"
-                    "- Curriculum: subject names, grade levels (Grade 7, SHS), MELCs, programs (K-12, ALS)\n"
-                    "- Assessments: NAT, PISA, quarterly exams\n"
-                    "- Concepts/Topics: promotion, reclassification, ranking, equivalents\n\n"
-                    "Be generous — extract concepts and domain terms, not just proper nouns.\n"
-                    "Example: {\"entities\": [\"Teacher I\", \"Teacher II\", \"promotion\", \"DepEd\"]}\n"
-                    "Return {\"entities\": []} ONLY if the question is completely generic."
-                )
+                # Prompt: QUERY_NER_SYSTEM_PROMPT — loaded from .env via config.py
+                # Extracts entity names from the user's question for Neo4j graph_search_tool
+                "content": QUERY_NER_SYSTEM_PROMPT.rstrip() + "\n\nReturn only a valid JSON object with a top-level 'entities' array.",
             },
-            {"role": "user", "content": text[:500]},
+            {"role": "user", "content": f"Extract entity names from this text and respond in JSON.\n\nText:\n{text[:500]}"},
         ],
         temperature=QUERY_NER_TEMPERATURE,
         max_tokens=QUERY_NER_MAX_TOKENS,
@@ -512,72 +491,10 @@ async def entity_explorer_tool(input: EntityExploreInput) -> str:
 
 # ── Tool 8: text2cypher_tool ──────────────────────────────────────────────────
 
-# Graph schema description injected into the LLM prompt so it knows
-# exactly what nodes, properties, and relationships exist.
-# Update this if you add new labels or relationship types to your graph.
-_GRAPH_SCHEMA = """
-Node labels and properties:
-  (:Document  {user_id: string, file_name: string, job_id: string})
-  (:Entity    {user_id: string, name: string, type: string})
-    type is one of: STUDENT, TEACHER, SCHOOL_HEAD, OFFICIAL,
-                    SCHOOL, DISTRICT, DIVISION, REGION,
-                    SUBJECT, GRADE_LEVEL, COMPETENCY, PROGRAM,
-                    POLICY, PROVISION,
-                    ASSESSMENT, METRIC,
-                    PERIOD,
-                    CONCEPT, CHARACTER, SETTING
-
-Relationships:
-  (:Entity)-[:APPEARS_IN {chunks: list}]->(:Document)
-
-  Entity-to-Entity relationships use NATIVE edge types (not a generic RELATES_TO).
-  Each relationship type is its own Neo4j edge label, for example:
-    (:Entity)-[:ISSUED_BY]->(:Entity)
-    (:Entity)-[:APPLIES_TO]->(:Entity)
-    (:Entity)-[:COVERS]->(:Entity)
-
-  Known relationship types (new types may appear as documents are processed):
-    Policy:      ISSUED_BY, SUPERSEDES, APPLIES_TO, IMPLEMENTS, REFERENCES, SIGNED_BY, EFFECTIVE_ON
-    Curriculum:  COVERS, PRESCRIBED_FOR, ALIGNED_WITH, USES_APPROACH, TAUGHT_IN
-    Performance: SCORED_ON, ENROLLED_IN, TEACHES, ASSESSED_IN, ACHIEVED
-    Report:      IMPLEMENTED_BY, CONDUCTED_AT, SUPERVISED_BY, PARTICIPATED_IN
-    Content:     TEACHES_CONCEPT, SUITABLE_FOR, FEATURES, BELONGS_TO
-    Fallback:    RELATED_TO (when no specific type was extracted)
-
-All nodes are scoped per user — every query MUST filter by user_id.
-"""
-
-_CYPHER_SYSTEM_PROMPT = f"""You are a Cypher query generator for a Neo4j knowledge graph.
-
-Graph schema:
-{_GRAPH_SCHEMA}
-
-Rules you MUST follow — no exceptions:
-1. ALWAYS include a user_id filter: {{user_id: $user_id}} on every node pattern
-2. ALWAYS end with LIMIT $limit
-3. Use the native relationship types listed in the schema (e.g. [:ISSUED_BY], [:COVERS])
-4. When the exact relationship type is unknown, use a generic pattern like -[r]- with WHERE type(r) <> 'APPEARS_IN'
-5. Return only the raw Cypher query — no explanation, no markdown fences, no comments
-6. If the question cannot be answered with the schema, return exactly: UNSUPPORTED
-
-Good example 1 — specific relationship:
-  Question: "Which policies were issued by DepEd?"
-  Cypher:
-  MATCH (p:Entity {{user_id: $user_id, type: "POLICY"}})-[:ISSUED_BY]->(o:Entity {{user_id: $user_id, name: "DepEd"}})
-  RETURN p.name AS policy, o.name AS issuer
-  LIMIT $limit
-
-Good example 2 — any relationship:
-  Question: "Which teachers are connected to Olongapo City National High School?"
-  Cypher:
-  MATCH (t:Entity {{user_id: $user_id, type: "TEACHER"}})-[r]-(s:Entity {{user_id: $user_id, name: "Olongapo City National High School"}})
-  WHERE type(r) <> 'APPEARS_IN'
-  RETURN t.name AS teacher, type(r) AS relationship, s.name AS school
-  LIMIT $limit
-
-Bad example (NEVER do this — missing user_id):
-  MATCH (e:Entity) WHERE e.name = "Olongapo City National High School" RETURN e
-"""
+# Graph schema and Cypher system prompt are loaded from .env via config.py.
+# GRAPH_SCHEMA defines Neo4j node labels, properties, and relationship types.
+# CYPHER_SYSTEM_PROMPT includes the schema (<<GRAPH_SCHEMA>> replaced at import time).
+# Update GRAPH_SCHEMA in .env when new labels or relationship types are added.
 
 
 class Text2CypherInput(BaseModel):
@@ -618,6 +535,8 @@ async def text2cypher_tool(input: Text2CypherInput) -> str:
     response = await _openai.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
+            # Prompt: CYPHER_SYSTEM_PROMPT — loaded from .env via config.py
+            # Schema is pre-injected (<<GRAPH_SCHEMA>> replaced at startup in config.py)
             {"role": "system", "content": _CYPHER_SYSTEM_PROMPT},
             {"role": "user",   "content": input.question},
         ],

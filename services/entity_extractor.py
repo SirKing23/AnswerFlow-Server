@@ -45,6 +45,13 @@ from config import (
     ENTITY_CAP_DEFAULT, ENTITY_CAP_CONTENT,
     RELATION_CAP_DEFAULT, RELATION_CAP_CONTENT,
     ENTITY_EXTRACT_CHAR_LIMIT,
+    # Per-profile extraction prompts — defined in .env, assembled in config.py
+    # Each prompt includes ENTITY_BASE_RULES (injected via <<BASE_RULES>> at startup)
+    ENTITY_PROMPT_POLICY,
+    ENTITY_PROMPT_CURRICULUM,
+    ENTITY_PROMPT_PERFORMANCE,
+    ENTITY_PROMPT_REPORT,
+    ENTITY_PROMPT_CONTENT,
 )
 
 log = logging.getLogger(__name__)
@@ -179,165 +186,17 @@ def classify_document(file_name: str, metadata: dict) -> str:
 
 # ── Extraction prompts per profile ─────────────────────────────────────────────
 
-_BASE_RULES = """
-Rules you MUST follow:
-- Extract ONLY entities explicitly named or clearly identified in the text
-- Entity names must be in their canonical/full form
-- Skip pronouns, generic nouns ("the teacher", "the school"), and vague references
-- Relationships must have both endpoints present in the extracted entities list
-- Relationship type must be a single SCREAMING_SNAKE_CASE verb phrase
-- Return ONLY valid JSON — no markdown fences, no explanation
-
-JSON format:
-{
-  "entities":  [{"name": "string", "type": "ENTITY_TYPE"}, ...],
-  "relations": [{"source": "entity name", "target": "entity name", "type": "RELATION_TYPE"}, ...]
-}
-"""
-
+# Prompts loaded from .env via config.py.
+# ENTITY_BASE_RULES (shared JSON rules) is injected into each profile via
+# the <<BASE_RULES>> placeholder, which config.py replaces at startup.
+# Edit ENTITY_PROMPT_POLICY / _CURRICULUM / _PERFORMANCE / _REPORT / _CONTENT
+# and ENTITY_BASE_RULES in .env to add entity/relation types without code changes.
 _PROMPTS: dict[str, str] = {
-
-    "policy": f"""You are a named entity recognition system specialized in Philippine education policy documents.
-Extract entities and relationships from DepEd memos, orders, circulars, Republic Acts, and school bylaws.
-
-Valid entity types:
-  POLICY     — DepEd Orders, Memos, Circulars, Republic Acts, bylaws (use full official name)
-  PROVISION  — Specific numbered sections e.g. "Section 4.2", "Item 3.a"
-  OFFICIAL   — Named signatories, directors, superintendents, secretaries
-  DIVISION   — School divisions e.g. "SDO Olongapo City"
-  REGION     — Regional offices e.g. "DepEd Region III - Central Luzon"
-  DISTRICT   — School districts e.g. "Subic District"
-  SCHOOL     — Named schools e.g. "Naugsol Integrated School", "Matain Elementary School", "Subic National High School", "Sto. Tomas High School"
-  PROGRAM    — Named programs e.g. "K-12 Basic Education Program", "ALS"
-  GRADE_LEVEL — Grade levels or school types this policy applies to
-  PERIOD     — Effective dates, school years, deadlines
-
-Valid relation types:
-  ISSUED_BY     — POLICY issued by OFFICIAL or DIVISION or REGION
-  SUPERSEDES    — POLICY replaces an older POLICY
-  AMENDS        — POLICY modifies another POLICY
-  IMPLEMENTS    — POLICY implements a higher POLICY or Republic Act
-  APPLIES_TO    — POLICY applies to SCHOOL, PROGRAM, GRADE_LEVEL, or DIVISION
-  REQUIRES      — POLICY requires a specific action or compliance item
-  REFERENCES    — POLICY references another POLICY or legal instrument
-  SIGNED_BY     — POLICY signed by OFFICIAL
-  EFFECTIVE_ON  — POLICY effective on a PERIOD
-  COVERS        — PROVISION covers a specific topic or PROGRAM
-
-Limit to the 10 most important entities and 10 most important relations.
-If nothing is extractable, return empty arrays.
-
-{_BASE_RULES}""",
-
-    "curriculum": f"""You are a named entity recognition system specialized in Philippine curriculum documents.
-Extract entities and relationships from curriculum guides, MELCs, lesson plans, and pacing guides.
-
-Valid entity types:
-  SUBJECT     — Learning areas e.g. "Filipino", "Mathematics", "Science", "MAPEH", "EPP"
-  GRADE_LEVEL — Grade levels e.g. "Grade 3", "Kinder", "Grade 11", "SHS"
-  COMPETENCY  — Specific MELC codes or learning objectives (use exact text if short)
-  PROGRAM     — Teaching approaches e.g. "Marungko Approach", "MTB-MLE", "SHS", "ALS"
-  TEACHER     — Named teachers if mentioned
-  SCHOOL      — Named schools if mentioned
-  PERIOD      — School year, quarter, grading period
-  ASSESSMENT  — Named assessment types e.g. "Quarterly Assessment", "Performance Task"
-
-Valid relation types:
-  COVERS          — SUBJECT covers a COMPETENCY
-  PRESCRIBED_FOR  — COMPETENCY prescribed for a GRADE_LEVEL
-  ALIGNED_WITH    — ASSESSMENT aligned with a COMPETENCY
-  USES_APPROACH   — SUBJECT or COMPETENCY uses a PROGRAM or teaching approach
-  SEQUENCED_AFTER — COMPETENCY follows another COMPETENCY
-  TAUGHT_IN       — COMPETENCY taught in a specific PERIOD
-  REQUIRES        — COMPETENCY requires mastery of another COMPETENCY
-
-Limit to the 10 most important entities and 10 most important relations.
-If nothing is extractable, return empty arrays.
-
-{_BASE_RULES}""",
-
-    "performance": f"""You are a named entity recognition system specialized in Philippine school performance documents.
-Extract entities and relationships from grading sheets, class records, test results, and assessment reports.
-
-Valid entity types:
-  STUDENT     — Named learners (use full name as written)
-  TEACHER     — Named class adviser or subject teacher
-  SCHOOL      — Named school
-  SUBJECT     — Learning area being assessed
-  GRADE_LEVEL — Grade and section e.g. "Grade 4 - Mabini"
-  ASSESSMENT  — Named exam or task e.g. "Q1 Quarterly Exam", "Performance Task 2"
-  METRIC      — Scores, MPS, percentage, rating e.g. "MPS 78.5", "Average 82"
-  PERIOD      — Grading period, quarter, school year e.g. "Q3 SY 2023-2024"
-
-Valid relation types:
-  SCORED_ON    — STUDENT scored a METRIC on an ASSESSMENT
-  ENROLLED_IN  — STUDENT enrolled in a GRADE_LEVEL
-  TEACHES      — TEACHER teaches a SUBJECT to a GRADE_LEVEL
-  ASSESSED_IN  — ASSESSMENT given in a PERIOD
-  BELONGS_TO   — GRADE_LEVEL belongs to a SCHOOL
-  ACHIEVED     — GRADE_LEVEL or SCHOOL achieved a METRIC in a PERIOD
-  COMPARED_TO  — METRIC compared to another METRIC across different PERIOD
-
-Limit to the 10 most important entities and 10 most important relations.
-If nothing is extractable, return empty arrays.
-
-{_BASE_RULES}""",
-
-    "report": f"""You are a named entity recognition system specialized in Philippine school accomplishment and narrative reports.
-Extract entities and relationships from accomplishment reports, IPCRF, RPMS narratives, and program reports.
-
-Valid entity types:
-  TEACHER     — Named teachers who implemented or participated
-  SCHOOL_HEAD — Named principal or head teacher
-  OFFICIAL    — Named division or regional officials
-  SCHOOL      — Named school
-  DIVISION    — School division
-  PROGRAM     — Named programs or projects e.g. "Brigada Eskwela", "Reading Program"
-  METRIC      — Quantified outcomes e.g. "95% participation rate", "120 beneficiaries"
-  PERIOD      — Reporting period, school year, quarter
-  ASSESSMENT  — Named evaluations or monitoring activities
-
-Valid relation types:
-  IMPLEMENTED_BY  — PROGRAM implemented by TEACHER or SCHOOL_HEAD
-  CONDUCTED_AT    — PROGRAM or ASSESSMENT conducted at SCHOOL
-  REPORTED_IN     — METRIC reported in a PERIOD
-  SUPERVISED_BY   — PROGRAM supervised by SCHOOL_HEAD or OFFICIAL
-  PARTICIPATED_IN — TEACHER participated in a PROGRAM
-  ACHIEVED        — SCHOOL or PROGRAM achieved a METRIC
-  COVERED         — PROGRAM covered a PERIOD or beneficiary group
-  ENDORSED_BY     — Report endorsed by SCHOOL_HEAD or OFFICIAL
-
-Limit to the 10 most important entities and 10 most important relations.
-If nothing is extractable, return empty arrays.
-
-{_BASE_RULES}""",
-
-    "content": f"""You are a named entity recognition system specialized in Philippine teaching and learning materials.
-Extract entities and relationships from stories, songs, reading passages, e-learning modules, worksheets, and presentations.
-
-Valid entity types:
-  SUBJECT     — Learning area this material belongs to
-  GRADE_LEVEL — Target grade level e.g. "Grade 2", "Kinder"
-  COMPETENCY  — Learning objective or MELC this material addresses
-  PROGRAM     — Teaching approach e.g. "Marungko", "MTB-MLE", "Big Books"
-  CONCEPT     — Key idea or topic being taught e.g. "Pagmamahal sa Bayan", "Water Cycle"
-  CHARACTER   — Named characters in stories or scenarios
-  SETTING     — Named places or settings in the material
-  TEACHER     — Named teacher if the material is attributed
-
-Valid relation types:
-  TEACHES_CONCEPT — material or SUBJECT teaches a CONCEPT
-  SUITABLE_FOR    — material suitable for a GRADE_LEVEL
-  ALIGNED_WITH    — material aligned with a COMPETENCY
-  USES_APPROACH   — material uses a PROGRAM or teaching method
-  FEATURES        — material features a CHARACTER or SETTING
-  BELONGS_TO      — material belongs to a SUBJECT
-
-Limit to 5 most important entities and 5 most important relations.
-Keep extraction minimal — this profile is used for retrieval support, not deep graph traversal.
-If nothing is extractable, return empty arrays.
-
-{_BASE_RULES}""",
+    "policy":      ENTITY_PROMPT_POLICY,       # Used below in extract_entities_and_relations
+    "curriculum":  ENTITY_PROMPT_CURRICULUM,   # Used below in extract_entities_and_relations
+    "performance": ENTITY_PROMPT_PERFORMANCE,  # Used below in extract_entities_and_relations
+    "report":      ENTITY_PROMPT_REPORT,        # Used below in extract_entities_and_relations
+    "content":     ENTITY_PROMPT_CONTENT,       # Used below in extract_entities_and_relations
 }
 
 
@@ -375,8 +234,13 @@ async def extract_entities_and_relations(
     text_input = chunk_text[:ENTITY_EXTRACT_CHAR_LIMIT].strip()
 
     # Classify document type and select prompt
+    # Prompt: _PROMPTS[profile] — one of ENTITY_PROMPT_POLICY / _CURRICULUM / _PERFORMANCE /
+    # _REPORT / _CONTENT, each loaded from .env via config.py (ENTITY_BASE_RULES injected)
     profile = classify_document(file_name, metadata)
-    system_prompt = _PROMPTS[profile]
+    system_prompt = (
+        _PROMPTS[profile].rstrip()
+        + "\n\nReturn only a valid JSON object with top-level keys 'entities' and 'relations'."
+    )
 
     # Enrich the user message with available structural context
     headings = metadata.get("headings", [])
@@ -390,7 +254,10 @@ async def extract_entities_and_relations(
     if context_hint:
         context_hint = context_hint.strip() + "\n\n"
 
-    user_message = f"{context_hint}Text:\n{text_input}"
+    user_message = (
+        f"{context_hint}Extract the entities and relations from the following text and respond in JSON.\n\n"
+        f"Text:\n{text_input}"
+    )
 
     try:
         response = await _client.chat.completions.create(

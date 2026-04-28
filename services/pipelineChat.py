@@ -8,6 +8,7 @@ from config import (
     OPENAI_API_KEY, OPENAI_EMBEDDING_MODEL,
     CHAT_TEMPERATURE, CHAT_MAX_TOKENS,
     SEARCH_TOP_K, SEARCH_SIMILARITY_THRESHOLD,
+    PIPELINE_CHAT_SYSTEM_PROMPT,  # system prompt — defined in .env
 )
 
 _client = AsyncOpenAI(api_key=OPENAI_API_KEY)
@@ -139,16 +140,11 @@ def build_messages(
     - Conversation history (previous turns)
     - Current user message with context injected
     """
-    system_prompt = """You are a helpful assistant that answers questions based on the user's uploaded documents.
-
-Rules:
-- Answer ONLY using the provided context below. Do not use outside knowledge.
-- If the context doesn't contain enough information to answer, say so clearly.
-- Always cite which source (Source 1, Source 2, etc.) your answer comes from.
-- Be concise and direct. Use bullet points for lists.
-- If asked a follow-up question, use the conversation history to maintain context."""
-
-    messages = [{"role": "system", "content": system_prompt}]
+    # Prompt: PIPELINE_CHAT_SYSTEM_PROMPT — loaded from .env via config.py
+    messages = [{
+        "role": "system",
+        "content": PIPELINE_CHAT_SYSTEM_PROMPT,
+    }]
 
     # Add conversation history (previous turns)
     for msg in history:
