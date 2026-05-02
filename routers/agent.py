@@ -33,8 +33,7 @@ async def agent_chat(request: Request, body: AgentRequest):
     """
     Agentic RAG endpoint.
 
-    Unlike /api/chat which always runs a fixed pipeline,
-    this endpoint uses an AI orchestrator that decides which
+    This endpoint uses an AI orchestrator that decides which
     tools to call based on the complexity of the query.
 
     Tool flow (agent decides):

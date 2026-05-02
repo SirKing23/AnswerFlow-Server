@@ -6,15 +6,15 @@ using GPT-4o-mini with structured JSON output.
 
 Drop this file into:  services/entity_extractor.py
 
-Education-domain aware — classifies each document into one of 5 profiles
+Documentation-domain aware — classifies each document into one of 5 profiles
 and uses a specialized extraction prompt per profile for higher accuracy.
 
 Profiles:
-  policy      — Memos, issuances, DepEd orders, laws, bylaws
-  curriculum  — Curriculum guides, MELCs, lesson plans, pacing guides
-  performance — Grading sheets, test results, student work samples
-  report      — Accomplishment reports, narrative reports
-  content     — Stories, songs, e-learning materials, handouts, presentations
+  governance  — Policies, SOPs, compliance docs, security guidelines, governance docs
+  guide       — User guides, admin guides, installation guides, tutorials, setup docs
+  reference   — API references, specs, data dictionaries, SDK docs, OpenAPI
+  report      — Release notes, changelogs, incident reports, audit reports, post-mortems
+  general     — README, architecture overviews, whitepapers, FAQs, presentations
 
 Called by pipelineDocument.py once per chunk, right after embedding.
 
@@ -23,9 +23,9 @@ Signature change from the original:
 
 Returns:
   {
-    "entities":  [{"name": "DepEd Order 42 s.2024", "type": "POLICY"}, ...],
-    "relations": [{"source": "DepEd Order 42 s.2024", "target": "K-12 Program",
-                   "type": "APPLIES_TO"}, ...]
+    "entities":  [{"name": "PostgreSQL", "type": "PRODUCT"}, ...],
+    "relations": [{"source": "PostgreSQL", "target": "v14.2",
+                   "type": "HAS_VERSION"}, ...]
   }
 """
 
@@ -62,39 +62,37 @@ _client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 # ── Entity types ───────────────────────────────────────────────────────────────
 
 ENTITY_TYPES = [
-    # People
-    "STUDENT",      # Named learners in grading sheets, reports, student work
-    "TEACHER",      # Named teaching staff
-    "SCHOOL_HEAD",  # Principals, head teachers, master teachers
-    "OFFICIAL",     # Superintendents, directors, DepEd officials, signatories
+    # People & Organizations
+    "PERSON",        # Named individuals: authors, approvers, contacts
+    "ORGANIZATION",  # Companies, teams, departments, vendors
+    "ROLE",          # User roles, permissions, job titles e.g. "Administrator", "Developer"
 
-    # Institutions
-    "SCHOOL",       # Named schools e.g. "Olongapo City National High School"
-    "DISTRICT",     # School districts e.g. "Subic District"
-    "DIVISION",     # School divisions e.g. "SDO Olongapo City"
-    "REGION",       # DepEd regional offices e.g. "DepEd Region III"
+    # Products & Components
+    "PRODUCT",       # Named software, tools, services, platforms e.g. "Docker", "PostgreSQL"
+    "COMPONENT",     # Modules, services, APIs, libraries, plugins, packages
+    "VERSION",       # Software versions, releases e.g. "v2.1.0", "Release 3", "API v4"
+    "FEATURE",       # Named features, capabilities, functionality flags
 
-    # Curriculum
-    "SUBJECT",      # Learning areas: Math, Filipino, Science, EPP, MAPEH
-    "GRADE_LEVEL",  # Kinder, Grade 1-12, SHS strand e.g. "Grade 4", "ABM"
-    "COMPETENCY",   # Specific MELC codes and learning objectives
-    "PROGRAM",      # K-12, SHS, ALS, Brigada Eskwela, Marungko, MTB-MLE
+    # API & Interface
+    "ENDPOINT",      # API endpoints, routes, URLs e.g. "/api/v1/users", "GET /documents"
+    "PARAMETER",     # Config params, env variables, flags, settings keys, request fields
+    "ERROR_CODE",    # Error codes, HTTP status codes, exception types e.g. "404", "AuthException"
 
-    # Policy & Legal
-    "POLICY",       # DepEd Orders, Memos, Circulars, Republic Acts, bylaws
-    "PROVISION",    # Specific numbered sections within a law or memo
+    # Technical Context
+    "REQUIREMENT",   # Prerequisites, dependencies, system requirements
+    "PLATFORM",      # OS, cloud environments, infrastructure e.g. "Linux", "AWS", "Docker"
+    "STANDARD",      # Protocols, specs, formats e.g. "OAuth 2.0", "REST", "OpenAPI 3.0"
 
-    # Assessment & Performance
-    "ASSESSMENT",   # Quarterly exams, PTs, NAT, PISA, formative tasks
-    "METRIC",       # Scores, MPS, percentages, enrollment figures, ratings
+    # Governance
+    "POLICY",        # Security policies, compliance rules, governance documents
+    "PROCESS",       # Named procedures, workflows, SOPs
 
-    # Time
-    "PERIOD",       # School year, quarter, grading period e.g. "SY 2023-2024", "Q3"
+    # Measurement & Time
+    "METRIC",        # Performance metrics, KPIs, thresholds, limits
+    "PERIOD",        # Dates, timelines, deadlines, version release windows
 
-    # Content materials only
-    "CONCEPT",      # Abstract ideas, topics, themes in teaching materials
-    "CHARACTER",    # Named characters in stories or reading materials
-    "SETTING",      # Named places or settings in stories or discussions
+    # General
+    "CONCEPT",       # Technical concepts, terminology, abstract ideas
 ]
 
 
@@ -102,40 +100,43 @@ ENTITY_TYPES = [
 
 # Filename keyword signals per profile — checked first (fast, no LLM needed)
 _FILENAME_SIGNALS: dict[str, list[str]] = {
-    "policy": [
-        "memo", "memorandum", "order", "circular", "directive", "issuance",
-        "policy", "republic act", "ra ", "deped order", "do ", "division memo",
-        "regional memo", "national memo", "district memo", "bylaw", "by-law",
-        "magna carta", "child protection", "batas", "resolusyon", "resolution",
+    "governance": [
+        "policy", "compliance", "sop", "standard operating procedure",
+        "governance", "regulation", "regulatory", "bylaw", "by-law",
+        "security policy", "access control", "data protection", "gdpr",
+        "acceptable use", "terms", "code of conduct", "audit", "controls",
+        "information security", "privacy", "risk",
     ],
-    "curriculum": [
-        "melc", "curriculum", "competency", "competencies", "syllabus",
-        "lesson plan", "dll", "dlp", "daily log", "pacing", "guide",
-        "learning objective", "learning area", "cg ", "curriculum guide",
+    "guide": [
+        "guide", "tutorial", "how-to", "howto", "installation", "install",
+        "setup", "configuration", "getting started", "quickstart", "quick start",
+        "walkthrough", "manual", "handbook", "user guide", "admin guide",
+        "administrator guide", "developer guide", "deployment guide",
+        "migration guide", "upgrade guide", "onboarding", "troubleshoot",
     ],
-    "performance": [
-        "grading", "grade sheet", "class record", "sf9", "sf10", "report card",
-        "test result", "exam result", "score", "nat result", "quarterly exam",
-        "assessment result", "performance", "student record",
+    "reference": [
+        "api", "reference", "spec", "specification", "schema",
+        "data dictionary", "parameter", "endpoint", "swagger", "openapi",
+        "sdk", "interface", "glossary", "dictionary", "readme",
     ],
     "report": [
-        "accomplishment", "narrative report", "program report", "activity report",
-        "annual report", "monthly report", "school report", "ipcrf", "rpms",
-        "self assessment", "sar", "summary report",
+        "release note", "release notes", "changelog", "change log",
+        "incident", "postmortem", "post-mortem", "post mortem",
+        "status report", "runbook", "audit report", "assessment report",
+        "findings", "summary report",
     ],
-    "content": [
-        "story", "kwento", "song", "awit", "poem", "tula", "module", "activity sheet",
-        "worksheet", "handout", "presentation", "powerpoint", "visual aid",
-        "reading material", "learning material", "e-learning", "elearning",
-        "discussion", "lecture", "flashcard", "game", "puzzle",
+    "general": [
+        "overview", "introduction", "architecture", "design",
+        "whitepaper", "white paper", "presentation", "concept",
+        "about", "faq", "background",
     ],
 }
 
 # element_types composition signals — used when filename is ambiguous
 _ELEMENT_TYPE_SIGNALS: dict[str, list[str]] = {
-    "performance": ["table"],
-    "policy":      ["heading"],
-    "content":     ["narrative_text", "list_item"],
+    "reference": ["table"],
+    "governance": ["heading"],
+    "general":    ["narrative_text", "list_item"],
 }
 
 
@@ -146,20 +147,20 @@ def classify_document(file_name: str, metadata: dict) -> str:
     Priority:
       1. Filename keyword match  (most reliable)
       2. element_types composition from metadata
-      3. Default to 'content'   (safest fallback for teaching materials)
+      3. Default to 'general'   (safest fallback for unrecognized docs)
 
     Args:
-        file_name: Original filename e.g. "DepEd Memo 042 s.2024.pdf"
+        file_name: Original filename e.g. "API Reference v3.pdf"
         metadata:  Chunk metadata dict with optional keys:
                      element_types, headings, section
 
     Returns:
-        One of: "policy", "curriculum", "performance", "report", "content"
+        One of: "governance", "guide", "reference", "report", "general"
     """
     name_lower = file_name.lower()
 
     # 1. Filename signals — check each profile in priority order
-    priority_order = ["policy", "performance", "curriculum", "report", "content"]
+    priority_order = ["governance", "reference", "guide", "report", "general"]
     for profile in priority_order:
         if any(signal in name_lower for signal in _FILENAME_SIGNALS[profile]):
             log.debug(f"[entity_extractor] '{file_name}' → profile={profile} (filename match)")
@@ -170,18 +171,18 @@ def classify_document(file_name: str, metadata: dict) -> str:
     if element_types:
         type_set = set(element_types)
         if "table" in type_set:
-            log.debug(f"[entity_extractor] '{file_name}' → profile=performance (table elements)")
-            return "performance"
-        # Heading-heavy without table → likely policy or curriculum
+            log.debug(f"[entity_extractor] '{file_name}' → profile=reference (table elements)")
+            return "reference"
+        # Heading-heavy without table → likely governance or guide
         heading_count = element_types.count("heading")
         text_count    = element_types.count("text") + element_types.count("narrative_text")
         if heading_count > 2 and text_count > heading_count:
-            log.debug(f"[entity_extractor] '{file_name}' → profile=policy (heading-heavy)")
-            return "policy"
+            log.debug(f"[entity_extractor] '{file_name}' → profile=governance (heading-heavy)")
+            return "governance"
 
     # 3. Default
-    log.debug(f"[entity_extractor] '{file_name}' → profile=content (default fallback)")
-    return "content"
+    log.debug(f"[entity_extractor] '{file_name}' → profile=general (default fallback)")
+    return "general"
 
 
 # ── Extraction prompts per profile ─────────────────────────────────────────────
@@ -189,14 +190,13 @@ def classify_document(file_name: str, metadata: dict) -> str:
 # Prompts loaded from .env via config.py.
 # ENTITY_BASE_RULES (shared JSON rules) is injected into each profile via
 # the <<BASE_RULES>> placeholder, which config.py replaces at startup.
-# Edit ENTITY_PROMPT_POLICY / _CURRICULUM / _PERFORMANCE / _REPORT / _CONTENT
-# and ENTITY_BASE_RULES in .env to add entity/relation types without code changes.
+# Edit the ENTITY_PROMPT_* variables in .env to add entity/relation types without code changes.
 _PROMPTS: dict[str, str] = {
-    "policy":      ENTITY_PROMPT_POLICY,       # Used below in extract_entities_and_relations
-    "curriculum":  ENTITY_PROMPT_CURRICULUM,   # Used below in extract_entities_and_relations
-    "performance": ENTITY_PROMPT_PERFORMANCE,  # Used below in extract_entities_and_relations
-    "report":      ENTITY_PROMPT_REPORT,        # Used below in extract_entities_and_relations
-    "content":     ENTITY_PROMPT_CONTENT,       # Used below in extract_entities_and_relations
+    "governance": ENTITY_PROMPT_POLICY,       # governance, compliance, SOP docs
+    "guide":      ENTITY_PROMPT_CURRICULUM,   # user/admin/developer guides, tutorials
+    "reference":  ENTITY_PROMPT_PERFORMANCE,  # API refs, specs, data dictionaries
+    "report":     ENTITY_PROMPT_REPORT,       # release notes, changelogs, incidents
+    "general":    ENTITY_PROMPT_CONTENT,      # README, overviews, whitepapers
 }
 
 
@@ -234,8 +234,8 @@ async def extract_entities_and_relations(
     text_input = chunk_text[:ENTITY_EXTRACT_CHAR_LIMIT].strip()
 
     # Classify document type and select prompt
-    # Prompt: _PROMPTS[profile] — one of ENTITY_PROMPT_POLICY / _CURRICULUM / _PERFORMANCE /
-    # _REPORT / _CONTENT, each loaded from .env via config.py (ENTITY_BASE_RULES injected)
+    # Prompt: _PROMPTS[profile] — one of governance/guide/reference/report/general,
+    # each loaded from .env via config.py (ENTITY_BASE_RULES injected)
     profile = classify_document(file_name, metadata)
     system_prompt = (
         _PROMPTS[profile].rstrip()
@@ -271,12 +271,19 @@ async def extract_entities_and_relations(
             response_format={"type": "json_object"},
         )
 
-        raw    = response.choices[0].message.content.strip()
+        choice = response.choices[0]
+        if choice.finish_reason == "length":
+            log.warning(
+                f"[entity_extractor] Response truncated (max_tokens hit) for '{file_name}' — skipping chunk"
+            )
+            return {"entities": [], "relations": []}
+
+        raw    = choice.message.content.strip()
         parsed = json.loads(raw)
 
         # Determine entity cap based on profile
-        entity_cap   = ENTITY_CAP_CONTENT if profile == "content" else ENTITY_CAP_DEFAULT
-        relation_cap = RELATION_CAP_CONTENT if profile == "content" else RELATION_CAP_DEFAULT
+        entity_cap   = ENTITY_CAP_CONTENT if profile == "general" else ENTITY_CAP_DEFAULT
+        relation_cap = RELATION_CAP_CONTENT if profile == "general" else RELATION_CAP_DEFAULT
 
         entities  = _validate_entities(parsed.get("entities", []),  cap=entity_cap)
         relations = _validate_relations(parsed.get("relations", []), entities, cap=relation_cap)

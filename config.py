@@ -71,7 +71,7 @@ CHAT_MAX_TOKENS  = int(os.getenv("CHAT_MAX_TOKENS", 1024))
 
 # Entity extraction for knowledge graph (services/entity_extractor.py)
 ENTITY_EXTRACTOR_TEMPERATURE = float(os.getenv("ENTITY_EXTRACTOR_TEMPERATURE", 0.0))
-ENTITY_EXTRACTOR_MAX_TOKENS  = int(os.getenv("ENTITY_EXTRACTOR_MAX_TOKENS", 700))
+ENTITY_EXTRACTOR_MAX_TOKENS  = int(os.getenv("ENTITY_EXTRACTOR_MAX_TOKENS", 2500))
 
 # ── Search & Retrieval Settings ───────────────────────────────────────────────
 # Vector search defaults (ai/tools.py, services/pipelineChat.py)
@@ -100,10 +100,7 @@ ENABLE_INTERNET_SEARCH = os.getenv("ENABLE_INTERNET_SEARCH", "true").lower() in 
 INTERNET_SEARCH_RESULTS = int(os.getenv("INTERNET_SEARCH_RESULTS", 5))
 INTERNET_SEARCH_TIMEOUT = int(os.getenv("INTERNET_SEARCH_TIMEOUT", 10))
 
-# ── AI Prompts & Instructions ─────────────────────────────────────────────────
-# All prompt text lives in .env so it can be tuned without code changes.
-# <<GRAPH_SCHEMA>> in CYPHER_SYSTEM_PROMPT and <<BASE_RULES>> in entity prompts
-# are placeholder tokens replaced below at import time.
+
 
 # Orchestrator agent (ai/orchestrator.py → Agent(instructions=...))
 ORCHESTRATOR_INSTRUCTIONS       = os.getenv("ORCHESTRATOR_INSTRUCTIONS", "").strip()

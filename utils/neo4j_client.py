@@ -3,7 +3,6 @@ neo4j_client.py
 ================
 All Neo4j Aura operations for the RAG knowledge graph.
 
-Drop this file into:  utils/neo4j_client.py
 
 Responsibilities:
   - Singleton async driver (neo4j.AsyncGraphDatabase)
