@@ -37,21 +37,26 @@ async def parse_file(file_bytes: bytes, file_name: str, mime_type: str) -> str:
     if mime_type in SELF_PARSE_MIME_TYPES:
 
         if mime_type in ("text/plain",):
+            print(f"[router] Parsing {file_name} with text_parser")
             return parse_txt(file_bytes)
 
         if mime_type == "text/markdown":
+            print(f"[router] Parsing {file_name} with text_parser markdown")
             return parse_markdown(file_bytes)
 
         if mime_type in ("text/csv", "text/tsv", "text/tab-separated-values"):
+            print(f"[router] Parsing {file_name} with text_parser csv")
             return parse_csv(file_bytes)
 
         if mime_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+            print(f"[router] Parsing {file_name} with docx_parser")
             return parse_docx(file_bytes)
 
         if mime_type in (
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             "application/vnd.ms-excel",
         ):
+            print(f"[router] Parsing {file_name} with excel_parser")
             return parse_xlsx(file_bytes)
 
     # ── Unstructured.io path ──────────────────────────────────────────

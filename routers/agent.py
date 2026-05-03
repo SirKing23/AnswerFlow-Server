@@ -28,7 +28,7 @@ class AgentResponse(BaseModel):
     run_id:  str                      # frontend stores this and sends back next turn
 
 
-@router.post("/api/agent")
+@router.post("/api/v1/chatAgent")
 async def agent_chat(request: Request, body: AgentRequest):
     """
     Agentic RAG endpoint.

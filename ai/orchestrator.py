@@ -52,8 +52,7 @@ async def run_agent(
     set_run_context(run_id, user_id, file_id)
 
     agent = Agent(
-        name="RAG Orchestrator",
-        # Prompt: ORCHESTRATOR_INSTRUCTIONS — loaded from .env via config.py
+        name="RAG Orchestrator",      
         instructions=ORCHESTRATOR_INSTRUCTIONS,
         model=OPENAI_CHAT_MODEL,
         model_settings=ModelSettings(

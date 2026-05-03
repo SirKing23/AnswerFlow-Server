@@ -62,6 +62,7 @@ async def process_file_pipeline(
 
     try:
         # ── 1. Create job record ──────────────────────────────────────────────
+        print(f"Creating Job for {file_name}")
         await asyncio.sleep(5)   # race-condition guard (see RAG_SYSTEM_DESIGN.md)
         job_id = await create_job(
             user_file_id=user_file_id,
@@ -74,6 +75,7 @@ async def process_file_pipeline(
 
         # ── 2. Download file from Supabase Storage ────────────────────────────
         await _set_status(user_file_id, job_id, "Parsing")
+        print(f"Downloading file {file_name} from storage")
         file_bytes = await download_file_from_storage(storage_path, bucket)
 
         # ── 3. Deduplication check ────────────────────────────────────────────
@@ -91,7 +93,7 @@ async def process_file_pipeline(
 
         # ── 4. Parse ──────────────────────────────────────────────────────────
         text = await parse_file(file_bytes, file_name, mime_type)
-
+        print(f"Parsing completed for {file_name}")
         if not text or not text.strip():
             raise ValueError("Parsing produced empty text — file may be image-only or corrupted")
 
@@ -118,10 +120,12 @@ async def process_file_pipeline(
 
         # ── 6. Embed ──────────────────────────────────────────────────────────
         await _set_status(user_file_id, job_id, "Embedding")
+        print(f"Embedding {len(chunks)} chunks for {file_name}")
         embedded_chunks = await embed_chunks(chunks)
 
         # ── 7. Store embeddings → Supabase pgvector ───────────────────────────
         await _set_status(user_file_id, job_id, "Storing")
+        print(f"Storing embeddings for {file_name}")
 
         rows = [
             {
