@@ -23,7 +23,12 @@ import asyncio
 import gc
 import json
 import os
+import sys
 from pathlib import Path
+
+# Allow importing from the project root (two levels up)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from config import PICTURE_PROMPT  # image annotation prompt — defined in .env
 
 # ===========================================================================
 # ✏️  USER CONFIGURATION
@@ -67,7 +72,8 @@ SMOLVLM_MODEL = "256M"
 
 ENABLE_PICTURE_ANNOTATION    = False    # False = skip image descriptions (saves RAM)
 ENABLE_PICTURE_CLASSIFICATION = False  # True  = classify image type (photo/chart/diagram)
-PICTURE_PROMPT = "Describe the image in three concise sentences. Be accurate and specific."
+# Prompt: PICTURE_PROMPT — loaded from .env via config.py (see import at top of file)
+# Edit PICTURE_PROMPT in .env to change the VLM image description instruction.
 
 # Code and formula enrichment (experimental — needs extra models, slower)
 ENABLE_CODE_ENRICHMENT    = False  # True = detect and format code blocks
@@ -275,6 +281,7 @@ def build_converter():
             _repo_id = _model_map.get(SMOLVLM_MODEL, "HuggingFaceTB/SmolVLM-256M-Instruct")
             pic_opts = PictureDescriptionVlmOptions(
                 repo_id=_repo_id,
+                # Prompt: PICTURE_PROMPT — loaded from .env via config.py
                 prompt=PICTURE_PROMPT,
             )
             pdf_opts.picture_description_options = pic_opts

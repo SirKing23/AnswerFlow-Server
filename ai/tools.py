@@ -18,6 +18,13 @@ from config import (
     GRAPH_SEARCH_LIMIT, ENTITY_EXPLORER_LIMIT,
     TEXT2CYPHER_DEFAULT_LIMIT, TEXT2CYPHER_MAX_LIMIT,
     CHAT_HISTORY_WINDOW,
+    
+    # Prompts loaded from .env — edit there to tune without code changes
+    DECOMPOSER_SYSTEM_PROMPT,
+    CONTEXT_BUILDER_SYSTEM_PROMPT,
+    VALIDATOR_SYSTEM_PROMPT,
+    QUERY_NER_SYSTEM_PROMPT,
+    CYPHER_SYSTEM_PROMPT as _CYPHER_SYSTEM_PROMPT,
 )
 
 _openai = AsyncOpenAI(api_key=OPENAI_API_KEY)
@@ -61,54 +68,36 @@ def _info(msg: str): print(f"       {msg}")
 def _end():          print("=" * 62 + "\n")
 
 
-# ── Tool 1: user_query_embedder_tool ─────────────────────────────────────────
+# ── Tool 1: vector_search_tool ────────────────────────────────────────────────
 
-class EmbedInput(BaseModel):
-    run_id: str = Field(description="The current run ID for context sharing")
-    text:   str = Field(description="The text to embed")
-
-
-@function_tool
-async def user_query_embedder_tool(input: EmbedInput) -> str:
-    """
-    Embeds any text into a vector using OpenAI text-embedding-3-small.
-    Always call this first before search_chunks_tool.
-    Stores the embedding in run context so search_chunks_tool can reuse it.
-    """
-    embedding = await embed_single(input.text)
-    ctx = _run_context.get(input.run_id, {})
-    ctx["embedding"] = embedding
-    _run_context[input.run_id] = ctx
-    print(f"[embedder] {len(embedding)}d vector created for: {input.text[:60]}")
-    return f"Embedding created ({len(embedding)} dimensions). Ready for search."
-
-
-# ── Tool 2: search_chunks_tool ────────────────────────────────────────────────
-
-class SearchInput(BaseModel):
+class VectorSearchInput(BaseModel):
     run_id:               str   = Field(description="The current run ID for context sharing")
+    text:                 str   = Field(description="The text to embed and search for")
     similarity_threshold: float = Field(default=SEARCH_SIMILARITY_THRESHOLD, description="Minimum similarity score 0-1")
-    match_count:          int   = Field(default=SEARCH_TOP_K,    description="Number of chunks to retrieve")
+    match_count:          int   = Field(default=SEARCH_TOP_K, description="Number of chunks to retrieve")
 
 
 @function_tool
-async def search_chunks_tool(input: SearchInput) -> str:
+async def vector_search_tool(input: VectorSearchInput) -> str:
     """
-    Searches the user's pgvector database for chunks semantically similar to the embedded query.
-    Must call user_query_embedder_tool first.
+    Embeds the query text and searches the user's pgvector database for semantically similar chunks in one step.
     Respects file_id scoping — searches one file or all files depending on context.
+    Use for any content-level question. Can run in parallel with graph_search_tool.
     """
-    ctx       = _run_context.get(input.run_id, {})
-    embedding = ctx.get("embedding")
-    user_id   = ctx.get("user_id")
-    file_id   = ctx.get("file_id")
+    ctx     = _run_context.get(input.run_id, {})
+    user_id = ctx.get("user_id")
+    file_id = ctx.get("file_id")
 
-    if not embedding:
-        return "Error: No embedding found. Call user_query_embedder_tool first."
     if not user_id:
         return "Error: No user_id in context."
 
-    _banner("SUPABASE pgvector HIT -- search_chunks_tool")
+    # Step 1: Embed
+    embedding = await embed_single(input.text)
+    ctx["embedding"] = embedding
+    print(f"[vector_search] {len(embedding)}d vector created for: {input.text[:60]}")
+
+    # Step 2: Search
+    _banner("SUPABASE pgvector HIT -- vector_search_tool")
     _info(f"user_id   : {user_id}")
     _info(f"file_id   : {file_id or 'all files'}")
     _info(f"threshold : {input.similarity_threshold}  |  top-k: {input.match_count}")
@@ -175,12 +164,8 @@ async def query_decomposer_tool(input: DecomposeInput) -> str:
         messages=[
             {
                 "role": "system",
-                "content": (
-                    "You are a query analysis expert. Determine if the question needs "
-                    "breaking into sub-questions for better document retrieval. "
-                    "If simple, return as-is. If complex, break into 2-4 focused sub-questions. "
-                    "Return ONLY the question(s), numbered if multiple."
-                )
+                # Prompt: DECOMPOSER_SYSTEM_PROMPT — loaded from .env via config.py
+                "content": DECOMPOSER_SYSTEM_PROMPT,
             },
             {"role": "user", "content": input.query}
         ],
@@ -212,7 +197,7 @@ class ContextBuilderInput(BaseModel):
 async def context_builder_tool(input: ContextBuilderInput) -> str:
     """
     Fuses vector search chunks AND knowledge graph results into one coherent context.
-    Always call this after search_chunks_tool and/or graph_search_tool.
+    Always call this after vector_search_tool and/or graph_search_tool.
     Filters irrelevant content, resolves pronoun references from history,
     and incorporates entity relationship data from the graph.
     Call before answer_validator_tool.
@@ -222,7 +207,7 @@ async def context_builder_tool(input: ContextBuilderInput) -> str:
     graph_results = ctx.get("graph_results", [])
 
     if not chunks and not graph_results:
-        return "No results to build context from. Run search_chunks_tool or graph_search_tool first."
+        return "No results to build context from. Run vector_search_tool or graph_search_tool first."
 
     _banner("context_builder_tool -- fusing sources")
     _info(f"vector chunks : {len(chunks)}")
@@ -262,15 +247,8 @@ async def context_builder_tool(input: ContextBuilderInput) -> str:
         messages=[
             {
                 "role": "system",
-                "content": (
-                    "You are a context analyst. Given vector search chunks and knowledge "
-                    "graph findings, your job is to:\n"
-                    "1. Filter out content clearly irrelevant to the query\n"
-                    "2. Resolve pronouns or references using chat history\n"
-                    "3. Incorporate entity relationships from graph findings\n"
-                    "4. Organize everything logically for answering the question\n"
-                    "Keep all source labels intact. Do not add outside information."
-                )
+                # Prompt: CONTEXT_BUILDER_SYSTEM_PROMPT — loaded from .env via config.py
+                "content": CONTEXT_BUILDER_SYSTEM_PROMPT,
             },
             {
                 "role": "user",
@@ -328,11 +306,8 @@ async def answer_validator_tool(input: ValidatorInput) -> str:
         messages=[
             {
                 "role": "system",
-                "content": (
-                    "You are a fact-checking assistant. Check if every claim in the answer "
-                    "is supported by the context. Reply 'VALID' if fully grounded. "
-                    "Otherwise list each unsupported claim starting with '- UNSUPPORTED:'"
-                )
+                # Prompt: VALIDATOR_SYSTEM_PROMPT — loaded from .env via config.py
+                "content": VALIDATOR_SYSTEM_PROMPT,
             },
             {
                 "role": "user",
@@ -363,15 +338,11 @@ async def _extract_query_entities(text: str) -> list[str]:
         messages=[
             {
                 "role": "system",
-                "content": (
-                    "Extract named entities (people, companies, places, products, concepts) "
-                    "from the user's question. Return ONLY a JSON object with key entities "
-                    "containing an array of name strings. "
-                    "Example: {\"entities\": [\"Acme Corp\", \"Manila\"]}. "
-                    "Return {\"entities\": []} if no clear named entities exist."
-                )
+                # Prompt: QUERY_NER_SYSTEM_PROMPT — loaded from .env via config.py
+                # Extracts entity names from the user's question for Neo4j graph_search_tool
+                "content": QUERY_NER_SYSTEM_PROMPT.rstrip() + "\n\nReturn only a valid JSON object with a top-level 'entities' array.",
             },
-            {"role": "user", "content": text[:500]},
+            {"role": "user", "content": f"Extract entity names from this text and respond in JSON.\n\nText:\n{text[:500]}"},
         ],
         temperature=QUERY_NER_TEMPERATURE,
         max_tokens=QUERY_NER_MAX_TOKENS,
@@ -395,7 +366,7 @@ async def graph_search_tool(input: GraphSearchInput) -> str:
     - Vector search returned weak or no results for an entity-heavy question
     - The user asks about a specific named thing across documents
 
-    Complements search_chunks_tool -- run both, then context_builder_tool fuses the results.
+    Complements vector_search_tool -- run both in parallel, then context_builder_tool fuses the results.
     """
     from utils.neo4j_client import graph_search
 
@@ -418,7 +389,7 @@ async def graph_search_tool(input: GraphSearchInput) -> str:
         _end()
         return (
             "No named entities detected -- graph search needs a specific name to look up. "
-            "Use search_chunks_tool for semantic search instead."
+            "Use vector_search_tool for semantic search instead."
         )
 
     _info(f"Running Cypher on Neo4j Aura for: {entity_names}")
@@ -434,7 +405,7 @@ async def graph_search_tool(input: GraphSearchInput) -> str:
         _end()
         return (
             f"No documents found in the knowledge graph for: {', '.join(entity_names)}. "
-            "Try search_chunks_tool for a broader semantic search."
+            "Try vector_search_tool for a broader semantic search."
         )
 
     _ok(f"Neo4j returned {len(results)} document(s):")
@@ -520,55 +491,10 @@ async def entity_explorer_tool(input: EntityExploreInput) -> str:
 
 # ── Tool 8: text2cypher_tool ──────────────────────────────────────────────────
 
-# Graph schema description injected into the LLM prompt so it knows
-# exactly what nodes, properties, and relationships exist.
-# Update this if you add new labels or relationship types to your graph.
-_GRAPH_SCHEMA = """
-Node labels and properties:
-  (:Document  {user_id: string, file_name: string, job_id: string})
-  (:Entity    {user_id: string, name: string, type: string})
-    type is one of: STUDENT, TEACHER, SCHOOL_HEAD, OFFICIAL,
-                    SCHOOL, DISTRICT, DIVISION, REGION,
-                    SUBJECT, GRADE_LEVEL, COMPETENCY, PROGRAM,
-                    POLICY, PROVISION,
-                    ASSESSMENT, METRIC,
-                    PERIOD,
-                    CONCEPT, CHARACTER, SETTING
-
-Relationships:
-  (:Entity)-[:APPEARS_IN {chunks: list}]->(:Document)
-  (:Entity)-[:RELATES_TO {type: string}]->(:Entity)
-    RELATES_TO.type examples: ISSUED_BY, APPLIES_TO, IMPLEMENTS, REFERENCES, SIGNED_BY,
-      COVERS, PRESCRIBED_FOR, ALIGNED_WITH, USES_APPROACH, TAUGHT_IN,
-      SCORED_ON, ENROLLED_IN, TEACHES, ASSESSED_IN, BELONGS_TO, ACHIEVED,
-      IMPLEMENTED_BY, CONDUCTED_AT, SUPERVISED_BY, PARTICIPATED_IN,
-      TEACHES_CONCEPT, SUITABLE_FOR, FEATURES
-
-All nodes are scoped per user — every query MUST filter by user_id.
-"""
-
-_CYPHER_SYSTEM_PROMPT = f"""You are a Cypher query generator for a Neo4j knowledge graph.
-
-Graph schema:
-{_GRAPH_SCHEMA}
-
-Rules you MUST follow — no exceptions:
-1. ALWAYS include a user_id filter: {{user_id: $user_id}} on every node pattern
-2. ALWAYS end with LIMIT $limit
-3. Use only labels and relationship types defined in the schema above
-4. Return only the raw Cypher query — no explanation, no markdown fences, no comments
-5. If the question cannot be answered with the schema, return exactly: UNSUPPORTED
-
-Good example:
-  Question: "Which teachers are connected to Olongapo City National High School?"
-  Cypher:
-  MATCH (t:Entity {{user_id: $user_id, type: "TEACHER"}})-[:RELATES_TO]-(s:Entity {{user_id: $user_id, name: "Olongapo City National High School"}})
-  RETURN t.name AS teacher, s.name AS school
-  LIMIT $limit
-
-Bad example (NEVER do this — missing user_id):
-  MATCH (e:Entity) WHERE e.name = "Olongapo City National High School" RETURN e
-"""
+# Graph schema and Cypher system prompt are loaded from .env via config.py.
+# GRAPH_SCHEMA defines Neo4j node labels, properties, and relationship types.
+# CYPHER_SYSTEM_PROMPT includes the schema (<<GRAPH_SCHEMA>> replaced at import time).
+# Update GRAPH_SCHEMA in .env when new labels or relationship types are added.
 
 
 class Text2CypherInput(BaseModel):
@@ -609,6 +535,8 @@ async def text2cypher_tool(input: Text2CypherInput) -> str:
     response = await _openai.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
+            # Prompt: CYPHER_SYSTEM_PROMPT — loaded from .env via config.py
+            # Schema is pre-injected (<<GRAPH_SCHEMA>> replaced at startup in config.py)
             {"role": "system", "content": _CYPHER_SYSTEM_PROMPT},
             {"role": "user",   "content": input.question},
         ],
@@ -631,7 +559,7 @@ async def text2cypher_tool(input: Text2CypherInput) -> str:
         _end()
         return (
             "This question cannot be answered by a graph traversal with the current schema. "
-            "Try graph_search_tool or search_chunks_tool instead."
+            "Try graph_search_tool or vector_search_tool instead."
         )
 
     # ── Step 2: Safety check — block queries missing user_id filter ───────────

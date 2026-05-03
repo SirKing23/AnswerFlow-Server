@@ -28,19 +28,17 @@ class AgentResponse(BaseModel):
     run_id:  str                      # frontend stores this and sends back next turn
 
 
-@router.post("/api/agent")
+@router.post("/api/v1/chatAgent")
 async def agent_chat(request: Request, body: AgentRequest):
     """
     Agentic RAG endpoint.
 
-    Unlike /api/chat which always runs a fixed pipeline,
-    this endpoint uses an AI orchestrator that decides which
+    This endpoint uses an AI orchestrator that decides which
     tools to call based on the complexity of the query.
 
     Tool flow (agent decides):
       query_decomposer_tool  → breaks complex questions apart
-      user_query_embedder_tool → embeds the query
-      search_chunks_tool       → retrieves relevant chunks
+      vector_search_tool       → embeds query + retrieves relevant chunks
       context_builder_tool     → enriches and filters context
       answer_validator_tool    → checks answer is grounded
       text2cypher_tool           → converts simple queries to Cypher for direct graph retrieval
@@ -58,7 +56,7 @@ async def agent_chat(request: Request, body: AgentRequest):
         message=body.message,
         history=history,
         file_id=body.file_id,
-        run_id=body.run_id,
+        run_id=body.run_id
     )
 
     if result["error"]:

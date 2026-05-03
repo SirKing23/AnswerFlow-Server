@@ -43,7 +43,7 @@ STORAGE_BUCKET            = os.getenv("STORAGE_BUCKET", "user-files")
 ORCHESTRATOR_TEMPERATURE      = float(os.getenv("ORCHESTRATOR_TEMPERATURE", 0.7))
 ORCHESTRATOR_PRESENCE_PENALTY = float(os.getenv("ORCHESTRATOR_PRESENCE_PENALTY", 0.3))
 ORCHESTRATOR_MAX_TOKENS       = int(os.getenv("ORCHESTRATOR_MAX_TOKENS", 2048))
-ORCHESTRATOR_MAX_TURNS        = int(os.getenv("ORCHESTRATOR_MAX_TURNS", 25))
+ORCHESTRATOR_MAX_TURNS        = int(os.getenv("ORCHESTRATOR_MAX_TURNS", 10))
 
 # Query decomposer (ai/tools.py → query_decomposer_tool)
 DECOMPOSER_TEMPERATURE = float(os.getenv("DECOMPOSER_TEMPERATURE", 0.1))
@@ -71,7 +71,7 @@ CHAT_MAX_TOKENS  = int(os.getenv("CHAT_MAX_TOKENS", 1024))
 
 # Entity extraction for knowledge graph (services/entity_extractor.py)
 ENTITY_EXTRACTOR_TEMPERATURE = float(os.getenv("ENTITY_EXTRACTOR_TEMPERATURE", 0.0))
-ENTITY_EXTRACTOR_MAX_TOKENS  = int(os.getenv("ENTITY_EXTRACTOR_MAX_TOKENS", 700))
+ENTITY_EXTRACTOR_MAX_TOKENS  = int(os.getenv("ENTITY_EXTRACTOR_MAX_TOKENS", 2500))
 
 # ── Search & Retrieval Settings ───────────────────────────────────────────────
 # Vector search defaults (ai/tools.py, services/pipelineChat.py)
@@ -94,6 +94,49 @@ ENTITY_EXTRACT_CHAR_LIMIT  = int(os.getenv("ENTITY_EXTRACT_CHAR_LIMIT", 2000))
 
 # Chat history window (ai/orchestrator.py, ai/tools.py → context_builder_tool)
 CHAT_HISTORY_WINDOW = int(os.getenv("CHAT_HISTORY_WINDOW", 6))
+
+# Internet Search Tool
+ENABLE_INTERNET_SEARCH = os.getenv("ENABLE_INTERNET_SEARCH", "true").lower() in ("true", "1", "yes")
+INTERNET_SEARCH_RESULTS = int(os.getenv("INTERNET_SEARCH_RESULTS", 5))
+INTERNET_SEARCH_TIMEOUT = int(os.getenv("INTERNET_SEARCH_TIMEOUT", 10))
+
+
+
+# Orchestrator agent (ai/orchestrator.py → Agent(instructions=...))
+ORCHESTRATOR_INSTRUCTIONS       = os.getenv("ORCHESTRATOR_INSTRUCTIONS", "").strip()
+
+# Tool-level prompts (ai/tools.py)
+DECOMPOSER_SYSTEM_PROMPT        = os.getenv("DECOMPOSER_SYSTEM_PROMPT", "").strip()
+CONTEXT_BUILDER_SYSTEM_PROMPT   = os.getenv("CONTEXT_BUILDER_SYSTEM_PROMPT", "").strip()
+VALIDATOR_SYSTEM_PROMPT         = os.getenv("VALIDATOR_SYSTEM_PROMPT", "").strip()
+QUERY_NER_SYSTEM_PROMPT         = os.getenv("QUERY_NER_SYSTEM_PROMPT", "").strip()
+
+# Neo4j graph schema + Cypher generator (ai/tools.py → text2cypher_tool)
+# GRAPH_SCHEMA is injected into CYPHER_SYSTEM_PROMPT via the <<GRAPH_SCHEMA>> token.
+GRAPH_SCHEMA                    = os.getenv("GRAPH_SCHEMA", "").strip()
+CYPHER_SYSTEM_PROMPT            = os.getenv("CYPHER_SYSTEM_PROMPT", "").strip() \
+                                    .replace("<<GRAPH_SCHEMA>>", GRAPH_SCHEMA)
+
+# Simple RAG chat (services/pipelineChat.py → build_messages)
+PIPELINE_CHAT_SYSTEM_PROMPT     = os.getenv("PIPELINE_CHAT_SYSTEM_PROMPT", "").strip()
+
+# Image annotation (services/parser/docling_parser.py → DoclingParser)
+PICTURE_PROMPT                  = os.getenv("PICTURE_PROMPT",
+                                    "Describe the image in three concise sentences. Be accurate and specific.")
+
+# Entity extractor — Neo4j relationship extraction (services/entity_extractor.py)
+# ENTITY_BASE_RULES is appended to each profile prompt via the <<BASE_RULES>> token.
+_ENTITY_BASE_RULES              = os.getenv("ENTITY_BASE_RULES", "").strip()
+
+def _entity_prompt(env_key: str) -> str:
+    """Load a profile prompt from env and inject the shared base rules."""
+    return os.getenv(env_key, "").strip().replace("<<BASE_RULES>>", _ENTITY_BASE_RULES)
+
+ENTITY_PROMPT_POLICY        = _entity_prompt("ENTITY_PROMPT_POLICY")
+ENTITY_PROMPT_CURRICULUM    = _entity_prompt("ENTITY_PROMPT_CURRICULUM")
+ENTITY_PROMPT_PERFORMANCE   = _entity_prompt("ENTITY_PROMPT_PERFORMANCE")
+ENTITY_PROMPT_REPORT        = _entity_prompt("ENTITY_PROMPT_REPORT")
+ENTITY_PROMPT_CONTENT       = _entity_prompt("ENTITY_PROMPT_CONTENT")
 
 # MIME types we handle ourselves (no Unstructured needed)
 SELF_PARSE_MIME_TYPES = {

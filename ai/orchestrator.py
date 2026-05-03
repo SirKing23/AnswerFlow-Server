@@ -5,10 +5,9 @@ import uuid
 from typing import Optional
 from agents import Agent, Runner, ModelSettings
 
-# All 8 tools live in tools.py
+# All tools live in tools.py
 from ai.tools import (
-    user_query_embedder_tool,
-    search_chunks_tool,
+    vector_search_tool,
     query_decomposer_tool,
     context_builder_tool,
     answer_validator_tool,
@@ -25,81 +24,14 @@ from config import (
     ORCHESTRATOR_TEMPERATURE, ORCHESTRATOR_PRESENCE_PENALTY,
     ORCHESTRATOR_MAX_TOKENS, ORCHESTRATOR_MAX_TURNS,
     CHAT_HISTORY_WINDOW,
+    ORCHESTRATOR_INSTRUCTIONS,  # agent instructions — defined in .env
 )
 import os as _os
 _os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 
-
-ORCHESTRATOR_INSTRUCTIONS = """
-You are an intelligent RAG orchestrator that answers questions using the user's uploaded documents.
-You have access to TWO retrieval systems — use both when appropriate:
-
-  1. Vector search  (pgvector / Supabase) — semantic similarity
-  2. Knowledge graph (Neo4j Aura)         — entity & relationship lookup
-
-━━━ TOOLS ━━━
-
-1. query_decomposer_tool
-   Use ONLY when the question is complex or multi-part. Skip for simple questions.
-
-2. user_query_embedder_tool
-   Always call before search_chunks_tool to create the vector embedding.
-
-3. search_chunks_tool
-   Semantic similarity search across the user's documents.
-   Call after embedding. Use for any content-level question.
-
-4. graph_search_tool
-   Searches Neo4j for documents containing specific named entities.
-   Call when the question mentions a specific person, company, place, product, or concept.
-   Call when asking about relationships between things.
-   Call when vector search returns weak results on entity-heavy questions.
-
-5. entity_explorer_tool
-   Explores all direct connections of a named entity in the knowledge graph.
-   Call after graph_search_tool when you want to dig deeper into one entity's neighborhood.
-
-6. text2cypher_tool
-   Converts a natural language question into a Cypher query and runs it on Neo4j.
-   Use for COMPLEX graph traversals that graph_search_tool cannot handle:
-     - Multi-hop: "who are all people connected to Acme Corp within 2 hops?"
-     - Aggregation: "which entity appears in the most documents?"
-     - Path finding: "what connects John to Manila?"
-     - Filtered: "find all ORG entities appearing in more than one document"
-   Do NOT use for simple entity lookups — use graph_search_tool for those.
-
-7. context_builder_tool
-   ALWAYS call after ALL searches are complete (vector + graph).
-   Fuses all result types into a coherent context for answering.
-
-8. answer_validator_tool
-   ALWAYS call before your final answer. Catches hallucinations.
-   Revise and re-validate if it returns UNSUPPORTED claims.
-
-━━━ DECISION GUIDE ━━━
-
-Simple factual question:
-  → embed → search_chunks_tool → context_builder_tool → validate → answer
-
-Entity question ("docs about Acme Corp", "what did John say about X"):
-  → graph_search_tool + embed + search_chunks_tool → context_builder_tool → validate → answer
-
-Relationship question ("how does X relate to Y", "what connects A and B"):
-  → graph_search_tool → entity_explorer_tool → context_builder_tool → validate → answer
-
-Complex graph traversal ("who is connected to X within 2 hops", "which entity appears most"):
-  → text2cypher_tool → context_builder_tool → validate → answer
-
-Complex multi-part question:
-  → decompose → for each sub-query: appropriate search tools → context_builder_tool → validate → answer
-
-━━━ RULES ━━━
-- Answer ONLY from retrieved document content. Never use outside knowledge.
-- Always cite which source file your answer comes from.
-- If no search returns results, say so clearly — do not make up an answer.
-- Be concise and direct. Use bullet points for lists.
-- The run_id is provided in the first user message — pass it to every tool call.
-"""
+# ORCHESTRATOR_INSTRUCTIONS is loaded from .env via config.py.
+# It defines the agent's persona, tool usage guide, decision rules, and anti-loop rules.
+# Edit the ORCHESTRATOR_INSTRUCTIONS key in .env to tune agent behaviour.
 
 
 async def run_agent(
@@ -120,24 +52,23 @@ async def run_agent(
     set_run_context(run_id, user_id, file_id)
 
     agent = Agent(
-        name="RAG Orchestrator",
+        name="RAG Orchestrator",      
         instructions=ORCHESTRATOR_INSTRUCTIONS,
         model=OPENAI_CHAT_MODEL,
         model_settings=ModelSettings(
-            parallel_tool_calls=False,
+            parallel_tool_calls=True,
             temperature=ORCHESTRATOR_TEMPERATURE,
             presence_penalty=ORCHESTRATOR_PRESENCE_PENALTY,
             max_tokens=ORCHESTRATOR_MAX_TOKENS,
         ),
         tools=[
             query_decomposer_tool,
-            user_query_embedder_tool,
-            search_chunks_tool,
+            vector_search_tool,       # embed + pgvector search in one step
             graph_search_tool,        # Neo4j entity search
             entity_explorer_tool,     # Neo4j neighborhood exploration
             text2cypher_tool,         # Neo4j natural language Cypher
             context_builder_tool,
-            answer_validator_tool,
+            answer_validator_tool
         ],
     )
 
